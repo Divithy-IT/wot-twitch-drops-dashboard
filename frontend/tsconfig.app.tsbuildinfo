@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/CampaignCard.tsx","./src/pages/Campaigns.tsx","./src/pages/Dashboard.tsx","./src/pages/Login.tsx","./src/pages/Settings.tsx","./src/pages/Watching.tsx"],"version":"5.7.3"}

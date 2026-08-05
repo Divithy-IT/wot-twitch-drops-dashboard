@@ -1,1 +1,0 @@
-"""WoT Twitch Drops Dashboard."""
