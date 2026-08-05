@@ -1,5 +1,6 @@
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,16 @@ async def logs(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_ad
 @router.get("/browser/auth")
 async def browser_auth(_: Admin = Depends(current_admin)):
     return Response(status_code=204)
+
+
+@router.get("/browser/entry")
+async def browser_entry(_: Admin = Depends(current_admin)):
+    response = RedirectResponse(
+        "/wot/browser/vnc.html?autoconnect=true&resize=scale&path=wot/browser/websockify",
+        status_code=302,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def browser_request(method: str, path: str) -> dict:
