@@ -1,0 +1,143 @@
+import hashlib
+import re
+from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
+from urllib.parse import urlparse
+from xml.etree import ElementTree
+from zoneinfo import ZoneInfo
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.models import Confidence, DetectedEvent, EventLog, SourceCache
+
+SITEMAP_URL = "https://worldoftanks.eu/sitemap-news-pl-1.xml"
+OFFICIAL_HOST = "worldoftanks.eu"
+KEYWORDS = {
+    "twitch": "drops", "drop": "drops", "stream": "stream", "transmis": "stream",
+    "turniej": "tournament", "tournament": "tournament", "onslaught": "onslaught",
+    "frontline": "frontline", "linia-frontu": "frontline", "battle-pass": "battle_pass",
+    "przepust": "battle_pass", "arcade": "arcade", "rocznic": "anniversary",
+    "anniversary": "anniversary", "promoc": "promotion", "specials": "promotion",
+    "zniż": "promotion", "discount": "promotion", "bonus-code": "bonus_code",
+    "kod-bonus": "bonus_code", "championship": "tournament", "cup": "tournament",
+}
+
+
+class MetaParser(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.meta = {}; self.title = ""; self._title = False
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "meta":
+            key = values.get("property") or values.get("name")
+            if key and values.get("content"): self.meta[key.lower()] = values["content"].strip()
+        elif tag == "title": self._title = True
+    def handle_endtag(self, tag):
+        if tag == "title": self._title = False
+    def handle_data(self, data):
+        if self._title: self.title += data.strip()
+
+
+def classify(text: str) -> tuple[str | None, Confidence]:
+    lowered = text.lower()
+    matches = [kind for word, kind in KEYWORDS.items() if word in lowered]
+    if not matches: return None, Confidence.low
+    kind = "drops" if "drops" in matches else matches[0]
+    confidence = Confidence.high if "twitch" in lowered and "drop" in lowered else Confidence.medium
+    return kind, confidence
+
+
+def title_from_url(url: str) -> str:
+    slug = urlparse(url).path.rstrip("/").split("/")[-1]
+    return " ".join(word.capitalize() for word in slug.replace("_", "-").split("-") if not word.isdigit())
+
+
+def extract_dates(text: str) -> list[datetime]:
+    results = []
+    warsaw = ZoneInfo("Europe/Warsaw")
+    patterns = [r"\b(20\d{2})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})\b",
+                r"\b(\d{1,2})[.](\d{1,2})[.](20\d{2})[ ,T]+(?:o )?(\d{1,2}):(\d{2})\b"]
+    for index, pattern in enumerate(patterns):
+        for match in re.finditer(pattern, text):
+            values = [int(x) for x in match.groups()]
+            year, month, day, hour, minute = values if index == 0 else (values[2], values[1], values[0], values[3], values[4])
+            try: results.append(datetime(year, month, day, hour, minute, tzinfo=warsaw).astimezone(UTC))
+            except ValueError: continue
+    return sorted(set(results))
+
+
+async def fetch(client: httpx.AsyncClient, url: str, cache: SourceCache | None = None) -> tuple[bytes | None, dict]:
+    if urlparse(url).hostname != OFFICIAL_HOST: raise ValueError("Dozwolone są wyłącznie oficjalne źródła World of Tanks")
+    headers = {"User-Agent": get_settings().source_user_agent, "Accept": "application/xml,text/html;q=0.9"}
+    if cache and cache.etag: headers["If-None-Match"] = cache.etag
+    if cache and cache.last_modified: headers["If-Modified-Since"] = cache.last_modified
+    response = await client.get(url, headers=headers, follow_redirects=True)
+    if response.status_code == 304: return None, dict(response.headers)
+    response.raise_for_status()
+    return response.content, dict(response.headers)
+
+
+async def sync_official_sources(db: AsyncSession) -> dict:
+    now = datetime.now(UTC); created = 0; checked = 0
+    cache = await db.get(SourceCache, SITEMAP_URL)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8)) as client:
+            content, headers = await fetch(client, SITEMAP_URL, cache)
+            if content is None:
+                cache.checked_at = now; cache.last_error = ""; await db.commit()
+                return {"created": 0, "checked": 0, "cached": True}
+            digest = hashlib.sha256(content).hexdigest()
+            if not cache:
+                cache = SourceCache(url=SITEMAP_URL)
+                db.add(cache)
+            cache.etag = headers.get("etag", ""); cache.last_modified = headers.get("last-modified", "")
+            cache.content_hash = digest; cache.checked_at = now; cache.last_error = ""
+            root = ElementTree.fromstring(content)
+            namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+            candidates = []
+            for node in root.findall("s:url", namespace):
+                url = node.findtext("s:loc", namespaces=namespace) or ""
+                modified = node.findtext("s:lastmod", namespaces=namespace)
+                kind, confidence = classify(url)
+                if not kind or not modified: continue
+                try: published = datetime.fromisoformat(modified).replace(tzinfo=UTC)
+                except ValueError: continue
+                if published < now - timedelta(days=45): continue
+                candidates.append((url, published, kind, confidence))
+            for url, published, kind, confidence in candidates[:30]:
+                checked += 1
+                existing = await db.scalar(select(DetectedEvent).where(DetectedEvent.source_url == url))
+                if existing:
+                    existing.last_checked_at = now
+                    continue
+                title = title_from_url(url); summary = "Wykryto w oficjalnej mapie aktualności World of Tanks."
+                excerpt = f"Oficjalna ścieżka aktualności: {urlparse(url).path}"
+                dates = []
+                try:
+                    body, _ = await fetch(client, url)
+                    if body and b"Loading site please wait" not in body[:3000]:
+                        parser = MetaParser(); parser.feed(body.decode("utf-8", "ignore"))
+                        title = parser.meta.get("og:title") or parser.title or title
+                        summary = parser.meta.get("description") or parser.meta.get("og:description") or summary
+                        excerpt = summary[:700]; dates = extract_dates(summary)
+                except (httpx.HTTPError, ValueError):
+                    pass
+                fingerprint = hashlib.sha256(url.rstrip("/").lower().encode()).hexdigest()
+                db.add(DetectedEvent(fingerprint=fingerprint, title=title[:300], summary=summary[:2000],
+                    published_at=published, starts_at=dates[0] if dates else None,
+                    ends_at=dates[1] if len(dates)>1 else None, source_url=url, excerpt=excerpt,
+                    confidence=confidence, event_type=kind, last_checked_at=now))
+                created += 1
+            if created:
+                db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych oficjalnych informacji", details={"count": created}))
+            await db.commit()
+            return {"created": created, "checked": checked, "cached": False}
+    except (httpx.HTTPError, ElementTree.ParseError) as exc:
+        if not cache: cache = SourceCache(url=SITEMAP_URL); db.add(cache)
+        cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+        db.add(EventLog(event_type="official_source_error", level="error", message="Błąd synchronizacji oficjalnego źródła"))
+        await db.commit()
+        return {"created": 0, "checked": 0, "error": cache.last_error}

@@ -7,9 +7,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.api import auth, campaigns, system, twitch_oauth
+from app.api import auth, campaigns, events, system, twitch_oauth
 from app.config import get_settings
-from app.services.scheduler import notification_sweep
+from app.services.scheduler import channel_sweep, notification_sweep, official_source_sweep
 
 settings = get_settings()
 
@@ -18,6 +18,10 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(notification_sweep, "interval", seconds=settings.sync_interval_seconds,
                       id="notification-sweep", max_instances=1, coalesce=True)
+    scheduler.add_job(official_source_sweep, "interval", hours=settings.source_sync_hours,
+                      id="official-source-sweep", max_instances=1, coalesce=True)
+    scheduler.add_job(channel_sweep, "interval", minutes=5,
+                      id="channel-sweep", max_instances=1, coalesce=True)
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
@@ -31,6 +35,7 @@ app.include_router(system.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(campaigns.router, prefix="/api")
 app.include_router(twitch_oauth.router, prefix="/api")
+app.include_router(events.router, prefix="/api")
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):

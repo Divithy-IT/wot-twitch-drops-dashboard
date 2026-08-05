@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import current_admin, mutation_admin
 from app.config import get_settings
 from app.database import get_db
-from app.models import Admin, EventLog, TwitchConnection
+from app.models import Admin, Campaign, EventLog, TwitchConnection
 from app.security import decrypt_token, encrypt_token, serializer
 from app.services.twitch import TwitchClient, TwitchError, oauth_expiry
 
@@ -109,6 +109,9 @@ async def channel_status(channel: str, db: AsyncSession = Depends(get_db), _: Ad
         raise HTTPException(502, str(exc)) from exc
     if not stream:
         return {"online": False, "channel": channel}
+    now = datetime.now(UTC)
+    active = (await db.execute(select(Campaign).where(Campaign.starts_at <= now, Campaign.ends_at > now))).scalars().all()
+    assigned = [x.id for x in active if channel.lower() in [v.lower() for v in x.eligible_channels]]
     return {
         "online": True,
         "channel": stream["user_login"],
@@ -116,4 +119,6 @@ async def channel_status(channel: str, db: AsyncSession = Depends(get_db), _: Ad
         "category": stream["game_name"],
         "started_at": stream["started_at"],
         "viewer_count": stream["viewer_count"],
+        "thumbnail_url": stream["thumbnail_url"],
+        "active_campaign_ids": assigned,
     }

@@ -13,6 +13,9 @@ Lekki, polskojęzyczny panel dla jednego administratora, który porządkuje kamp
 - Twitch OAuth Authorization Code bez pytania o hasło, tokeny szyfrowane w PostgreSQL;
 - SSE co 30 s i fallback polling co 60 s;
 - oficjalny Twitch Embed lub otwarcie streamu w nowej karcie;
+- wykrywanie nowych oficjalnych informacji z polskiej mapy aktualności `worldoftanks.eu` co 6 godzin;
+- kolejka „Wykryte wydarzenia” z pewnością, źródłem, zatwierdzaniem, odrzucaniem i deduplikacją;
+- kalendarz 30 dni i obserwowane kanały z metadanymi Twitch API;
 - log zdarzeń i model deduplikacji powiadomień;
 - FastAPI + React + PostgreSQL, bez Redisa i Chromium;
 - Docker Compose, healthchecki, migracje Alembic, nginx i CI.
@@ -84,5 +87,7 @@ Profil przeglądarki nie jest używany. Sekrety istnieją wyłącznie w `.env`, 
 ## Dane i ograniczenia
 
 `source_type` rozróżnia `twitch`, `wargaming` i `manual`; `progress_source` rozróżnia `official`, `manual` i `estimated`. W obecnym MVP widz nie może uzyskać postępu oficjalnego z Twitch API, więc UI domyślnie używa `manual`. Oficjalny stan odebrania należy potwierdzić na [Twitch Drops Inventory](https://www.twitch.tv/drops/inventory).
+
+Automatyczna synchronizacja korzysta wyłącznie z oficjalnej mapy `https://worldoftanks.eu/sitemap-news-pl-1.xml` oraz — jeżeli portal zwróci normalną treść — publicznych metadanych nowych artykułów. Portal może zwrócić stronę ochronną; aplikacja jej nie omija. W takim przypadku zachowuje URL, datę z sitemap i tytuł techniczny, oznacza niższą pewność i pozostawia daty wydarzenia, nagrody oraz czas oglądania puste.
 
 Dokumenty: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). Licencja: MIT.

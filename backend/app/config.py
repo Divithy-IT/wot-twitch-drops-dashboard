@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     twitch_redirect_uri: str = "http://localhost:8000/wot/api/oauth/twitch/callback"
     twitch_embed_parent: str = "localhost"
     sync_interval_seconds: int = 60
+    source_sync_hours: int = 6
+    source_user_agent: str = "WoT-Twitch-Drops-Dashboard/1.0 (+https://gry.lemanczyk-it.pl/wot/)"
     cors_origins: str = ""
     notification_types: str = "start_24h,start_1h,start,end_2h,reward,claim,stream_interrupted,oauth_expired"
     discord_webhook_url: str = ""

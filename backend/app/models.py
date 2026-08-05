@@ -19,6 +19,19 @@ class ProgressSource(str, enum.Enum):
     estimated = "estimated"
 
 
+class DetectionStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    duplicate = "duplicate"
+
+
+class Confidence(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
 class Admin(Base):
     __tablename__ = "admins"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -94,3 +107,44 @@ class NotificationDelivery(Base):
     dedupe_key: Mapped[str] = mapped_column(String(250))
     channel: Mapped[str] = mapped_column(String(30))
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class DetectedEvent(Base):
+    __tablename__ = "detected_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stream_times: Mapped[list] = mapped_column(JSON, default=list)
+    probable_rewards: Mapped[list] = mapped_column(JSON, default=list)
+    required_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_url: Mapped[str] = mapped_column(String(600), unique=True)
+    source_name: Mapped[str] = mapped_column(String(120), default="World of Tanks EU")
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[Confidence] = mapped_column(Enum(Confidence), default=Confidence.low)
+    event_type: Mapped[str] = mapped_column(String(50), default="event")
+    status: Mapped[DetectionStatus] = mapped_column(Enum(DetectionStatus), default=DetectionStatus.pending)
+    approved_campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True)
+
+
+class SourceCache(Base):
+    __tablename__ = "source_cache"
+    url: Mapped[str] = mapped_column(String(600), primary_key=True)
+    etag: Mapped[str] = mapped_column(String(300), default="")
+    last_modified: Mapped[str] = mapped_column(String(300), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+
+
+class WatchedChannel(Base):
+    __tablename__ = "watched_channels"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    login: Mapped[str] = mapped_column(String(100), unique=True)
+    drops_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    drops_source_url: Mapped[str] = mapped_column(String(600), default="")
+    drops_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
