@@ -95,7 +95,7 @@ Dokumenty: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [CHAN
 
 ## Trwała przeglądarka VPS
 
-Serwis `browser` uruchamia zwykłe Chromium w Xvfb, udostępnione przez noVNC pod `/wot/browser/`.
+Serwis `browser` uruchamia oficjalny Google Chrome w Xvfb, udostępniony przez noVNC pod `/wot/browser/`.
 Dostęp jest chroniony istniejącą sesją administratora; port noVNC jest związany wyłącznie z
 `127.0.0.1:8767`. Kontener ma limit 1 GiB RAM i 1 CPU, nie ma dostępu do Docker socket ani
 katalogów innych usług. Logowanie do Twitcha, uruchomienie transmisji i odbieranie nagród wykonuje

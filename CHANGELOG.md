@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-08-05
+
+- zastąpiono niewspieraną przez Twitch kompilację Debian Chromium oficjalnym Google Chrome;
+- włączono programowy WebGL przez SwiftShader i zachowano trwały profil przeglądarki;
+- usunięto flagi blokujące aktualizacje komponentów multimedialnych.
+
 ## 0.3.0 — 2026-08-05
 
 - trwała sesja Chromium z Xvfb/noVNC i osobnym wolumenem profilu;
