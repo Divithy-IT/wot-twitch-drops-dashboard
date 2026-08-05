@@ -64,7 +64,9 @@ async def create(data: CampaignIn, db: AsyncSession = Depends(get_db), _: Admin 
 async def update(campaign_id: int, data: CampaignIn, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
     campaign = await fetch(db, campaign_id)
     for key, value in data.model_dump(exclude={"rewards"}).items():
-        setattr(campaign, key, str(value) if key in {"link_url", "source_url"} and value else value)
+        if key in {"link_url", "source_url"}:
+            value = str(value or "")
+        setattr(campaign, key, value)
     await db.execute(delete(Reward).where(Reward.campaign_id == campaign_id))
     campaign.rewards = [Reward(**r.model_dump()) for r in data.rewards]
     campaign.source_updated_at = datetime.now(UTC)

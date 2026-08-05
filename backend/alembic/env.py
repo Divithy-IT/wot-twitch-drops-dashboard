@@ -15,8 +15,14 @@ target_metadata=Base.metadata
 def offline():
  context.configure(url=config.get_main_option("sqlalchemy.url"),target_metadata=target_metadata,literal_binds=True);context.run_migrations()
 async def online_run():
- engine=async_engine_from_config(config.get_section(config.config_ini_section),prefix="sqlalchemy.")
- async with engine.connect() as connection:await connection.run_sync(lambda c: context.configure(connection=c,target_metadata=target_metadata,compare_type=True));await connection.run_sync(lambda _: context.run_migrations())
- await engine.dispose()
+    engine=async_engine_from_config(config.get_section(config.config_ini_section),prefix="sqlalchemy.")
+    def run_migrations(connection):
+        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        with context.begin_transaction():
+            context.run_migrations()
+
+    async with engine.connect() as connection:
+        await connection.run_sync(run_migrations)
+    await engine.dispose()
 if context.is_offline_mode():offline()
 else:asyncio.run(online_run())

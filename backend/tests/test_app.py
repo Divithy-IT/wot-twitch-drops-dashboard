@@ -15,6 +15,7 @@ async def setup(client):
 async def test_health_and_base_path(client):
  assert (await client.get('/api/health')).json()=={'status':'ok'}
  assert (await client.get('/')).status_code in (200,503)
+ assert (await client.head('/')).status_code in (200,503)
 
 async def test_admin_setup_login_and_rate_limit(client):
  await setup(client)

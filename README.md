@@ -34,7 +34,7 @@ cp .env.example .env
 # wpisz unikalne sekrety; nigdy ich nie commituj
 docker compose up -d --build
 docker compose ps
-curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:8766/api/health
 ```
 
 Pierwsze wejście wyświetli formularz utworzenia administratora. Hasło musi mieć co najmniej 12 znaków.

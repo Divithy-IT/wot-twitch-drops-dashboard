@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -5,7 +6,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.api import auth, campaigns, system, twitch_oauth
 from app.config import get_settings
@@ -22,6 +22,8 @@ async def lifespan(app: FastAPI):
     yield
     scheduler.shutdown(wait=False)
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="WoT Twitch Drops Dashboard", root_path=settings.base_path, lifespan=lifespan,
               docs_url="/api/docs" if settings.app_env != "production" else None)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -34,6 +36,7 @@ app.include_router(twitch_oauth.router, prefix="/api")
 async def security_headers(request: Request, call_next):
     try: response = await call_next(request)
     except Exception:
+        logger.exception("Unhandled application error")
         return JSONResponse({"detail": "Wewnętrzny błąd aplikacji"}, status_code=500)
     response.headers.update({"X-Content-Type-Options": "nosniff", "X-Frame-Options": "SAMEORIGIN",
         "Referrer-Policy": "strict-origin-when-cross-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
@@ -41,8 +44,19 @@ async def security_headers(request: Request, call_next):
     return response
 
 dist = Path(__file__).parent / "static"
-if dist.exists():
-    app.mount("/assets", StaticFiles(directory=dist / "assets", check_dir=False), name="assets")
+@app.get("/assets/{asset_path:path}", include_in_schema=False)
+async def assets(asset_path: str):
+    asset_root = (dist / "assets").resolve()
+    target = (asset_root / asset_path).resolve()
+    if asset_root not in target.parents or not target.is_file():
+        from fastapi import HTTPException
+        raise HTTPException(404, "Nie znaleziono pliku")
+    return FileResponse(target)
+
+@app.head("/{path:path}", include_in_schema=False)
+async def spa_head(path: str):
+    index = dist / "index.html"
+    return FileResponse(index) if index.exists() else JSONResponse({}, 503)
 
 @app.get("/{path:path}", include_in_schema=False)
 async def spa(path: str):

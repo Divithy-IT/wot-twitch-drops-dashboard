@@ -73,3 +73,26 @@ async def sync(db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_a
         db.add(EventLog(event_type="twitch_sync_error", level="error", message=str(exc))); await db.commit()
         raise HTTPException(502, str(exc)) from exc
     return {"ok": True, "note": "Twitch nie udostępnia widzowi postępu Drops przez Helix API."}
+
+
+@router.get("/channel/{channel}")
+async def channel_status(channel: str, db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
+    if not channel.replace("_", "").isalnum():
+        raise HTTPException(422, "Nieprawidłowa nazwa kanału")
+    conn = await db.scalar(select(TwitchConnection))
+    if not conn:
+        raise HTTPException(409, "Połącz konto Twitch, aby sprawdzać stan kanałów")
+    try:
+        stream = await client.stream(decrypt_token(conn.access_token_encrypted), channel)
+    except TwitchError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if not stream:
+        return {"online": False, "channel": channel}
+    return {
+        "online": True,
+        "channel": stream["user_login"],
+        "title": stream["title"],
+        "category": stream["game_name"],
+        "started_at": stream["started_at"],
+        "viewer_count": stream["viewer_count"],
+    }
