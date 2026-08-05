@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 supervisor websockify x11vnc xvfb ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin browser \
-    && install -d -o browser -g browser /home/browser/.config/chromium /run/browser
+    && install -d -m 700 -o browser -g browser /home/browser/.config/chromium /run/browser
 
 COPY --chown=browser:browser supervisord.conf /etc/supervisor/conf.d/browser.conf
 COPY --chown=browser:browser manager.py /opt/browser/manager.py
