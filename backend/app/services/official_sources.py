@@ -14,7 +14,8 @@ from app.config import get_settings
 from app.models import Confidence, DetectedEvent, EventLog, SourceCache
 
 SITEMAP_URL = "https://worldoftanks.eu/sitemap-news-pl-1.xml"
-OFFICIAL_HOST = "worldoftanks.eu"
+YOUTUBE_FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCh554z2-7vIA-Mf9qAameoA"
+OFFICIAL_HOSTS = {"worldoftanks.eu", "www.youtube.com"}
 KEYWORDS = {
     "twitch": "drops", "drop": "drops", "stream": "stream", "transmis": "stream",
     "turniej": "tournament", "tournament": "tournament", "onslaught": "onslaught",
@@ -70,7 +71,7 @@ def extract_dates(text: str) -> list[datetime]:
 
 
 async def fetch(client: httpx.AsyncClient, url: str, cache: SourceCache | None = None) -> tuple[bytes | None, dict]:
-    if urlparse(url).hostname != OFFICIAL_HOST: raise ValueError("Dozwolone są wyłącznie oficjalne źródła World of Tanks")
+    if urlparse(url).hostname not in OFFICIAL_HOSTS: raise ValueError("Dozwolone są wyłącznie oficjalne źródła World of Tanks")
     headers = {"User-Agent": get_settings().source_user_agent, "Accept": "application/xml,text/html;q=0.9"}
     if cache and cache.etag: headers["If-None-Match"] = cache.etag
     if cache and cache.last_modified: headers["If-Modified-Since"] = cache.last_modified
@@ -140,4 +141,45 @@ async def sync_official_sources(db: AsyncSession) -> dict:
         cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
         db.add(EventLog(event_type="official_source_error", level="error", message="Błąd synchronizacji oficjalnego źródła"))
         await db.commit()
+        fallback = await sync_youtube_feed(db, now)
+        fallback["portal_error"] = cache.last_error
+        return fallback
+
+
+async def sync_youtube_feed(db: AsyncSession, now: datetime | None = None) -> dict:
+    now = now or datetime.now(UTC); cache = await db.get(SourceCache, YOUTUBE_FEED_URL)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8)) as client:
+            content, headers = await fetch(client, YOUTUBE_FEED_URL, cache)
+        if content is None:
+            cache.checked_at = now; cache.last_error = ""; await db.commit()
+            return {"created": 0, "checked": 0, "cached": True}
+        root = ElementTree.fromstring(content)
+        ns = {"a": "http://www.w3.org/2005/Atom", "m": "http://search.yahoo.com/mrss/"}
+        if not cache: cache = SourceCache(url=YOUTUBE_FEED_URL); db.add(cache)
+        cache.etag = headers.get("etag", ""); cache.last_modified = headers.get("last-modified", "")
+        cache.content_hash = hashlib.sha256(content).hexdigest(); cache.checked_at = now; cache.last_error = ""
+        created = 0; checked = 0
+        for entry in root.findall("a:entry", ns):
+            title = entry.findtext("a:title", namespaces=ns) or ""
+            description = entry.findtext("m:group/m:description", namespaces=ns) or ""
+            link = entry.find("a:link[@rel='alternate']", ns)
+            url = link.get("href", "") if link is not None else ""
+            kind, confidence = classify(f"{title} {description}")
+            if not kind or not url: continue
+            checked += 1
+            if await db.scalar(select(DetectedEvent).where(DetectedEvent.source_url == url)): continue
+            published_text = entry.findtext("a:published", namespaces=ns)
+            published = datetime.fromisoformat(published_text.replace("Z", "+00:00")) if published_text else None
+            dates = extract_dates(description); excerpt = re.sub(r"\s+", " ", description).strip()[:700]
+            db.add(DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
+                summary=excerpt[:2000], published_at=published, starts_at=dates[0] if dates else None,
+                ends_at=dates[1] if len(dates)>1 else None, source_url=url,
+                source_name="World of Tanks — oficjalny kanał YouTube", excerpt=excerpt,
+                confidence=confidence, event_type=kind, last_checked_at=now)); created += 1
+        if created: db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych komunikatów oficjalnego kanału WoT"))
+        await db.commit(); return {"created": created, "checked": checked, "cached": False}
+    except (httpx.HTTPError, ElementTree.ParseError) as exc:
+        if not cache: cache = SourceCache(url=YOUTUBE_FEED_URL); db.add(cache)
+        cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"; await db.commit()
         return {"created": 0, "checked": 0, "error": cache.last_error}
