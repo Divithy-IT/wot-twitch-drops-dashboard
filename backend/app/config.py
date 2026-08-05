@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_to: str = ""
+    browser_manager_url: str = "http://browser:9000"
+    browser_manager_secret: str = ""
 
     @property
     def secure_cookies(self) -> bool:

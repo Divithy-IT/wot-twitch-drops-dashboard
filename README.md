@@ -17,7 +17,7 @@ Lekki, polskojęzyczny panel dla jednego administratora, który porządkuje kamp
 - kolejka „Wykryte wydarzenia” z pewnością, źródłem, zatwierdzaniem, odrzucaniem i deduplikacją;
 - kalendarz 30 dni i obserwowane kanały z metadanymi Twitch API;
 - log zdarzeń i model deduplikacji powiadomień;
-- FastAPI + React + PostgreSQL, bez Redisa i Chromium;
+- FastAPI + React + PostgreSQL oraz opcjonalna trwała sesja Chromium/noVNC;
 - Docker Compose, healthchecki, migracje Alembic, nginx i CI.
 
 ## Podgląd
@@ -74,7 +74,8 @@ mkdir -p backups
 docker compose exec -T db pg_dump -U wot -Fc wot > "backups/wot-$(date +%F-%H%M).dump"
 ```
 
-Profil przeglądarki nie jest używany. Sekrety istnieją wyłącznie w `.env`, a dane w nazwanym wolumenie PostgreSQL.
+Profil Chromium znajduje się wyłącznie w nazwanym wolumenie `wot-drops_chromium_profile` i nie trafia
+do repozytorium ani backupu PostgreSQL. Sekrety istnieją wyłącznie w `.env`.
 
 ## Diagnostyka
 
@@ -91,3 +92,11 @@ Profil przeglądarki nie jest używany. Sekrety istnieją wyłącznie w `.env`, 
 Automatyczna synchronizacja korzysta wyłącznie z oficjalnej mapy `https://worldoftanks.eu/sitemap-news-pl-1.xml` oraz — jeżeli portal zwróci normalną treść — publicznych metadanych nowych artykułów. Portal może zwrócić stronę ochronną; aplikacja jej nie omija. W takim przypadku zachowuje URL, datę z sitemap i tytuł techniczny, oznacza niższą pewność i pozostawia daty wydarzenia, nagrody oraz czas oglądania puste.
 
 Dokumenty: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). Licencja: MIT.
+
+## Trwała przeglądarka VPS
+
+Serwis `browser` uruchamia zwykłe Chromium w Xvfb, udostępnione przez noVNC pod `/wot/browser/`.
+Dostęp jest chroniony istniejącą sesją administratora; port noVNC jest związany wyłącznie z
+`127.0.0.1:8767`. Kontener ma limit 1 GiB RAM i 1 CPU, nie ma dostępu do Docker socket ani
+katalogów innych usług. Logowanie do Twitcha, uruchomienie transmisji i odbieranie nagród wykonuje
+użytkownik ręcznie. Panel nie odczytuje DOM, cookies ani prywatnej zawartości Twitcha.

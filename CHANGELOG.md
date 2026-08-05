@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-08-05
+
+- trwała sesja Chromium z Xvfb/noVNC i osobnym wolumenem profilu;
+- chroniony sesją administratora adres `/wot/browser/`;
+- status, kontrola CSRF, monitoring awarii i limity 1 GiB/1 CPU;
+- priorytetowe kanały WoT oraz przypomnienie o ręcznym sprawdzeniu Drops Inventory.
+
 ## 0.2.0 — 2026-08-05
 
 - oficjalne źródła WoT, cache i synchronizacja co 6 godzin;

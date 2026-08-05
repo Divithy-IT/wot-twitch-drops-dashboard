@@ -32,6 +32,13 @@ async def notification_sweep() -> None:
                         try: await send_external(subject, campaign.link_url)
                         except Exception:
                             db.add(EventLog(event_type="notification_error", level="error", message="Nie udało się wysłać powiadomienia zewnętrznego")); await db.commit()
+        if now.hour == 18 and now.minute <= 1:
+            key = f"drops-inventory-reminder:{now.date().isoformat()}"
+            if await reserve_delivery(db, key, "in_app"):
+                message = "Przypomnienie: ręcznie sprawdź Twitch Drops Inventory"
+                db.add(EventLog(event_type="drops_inventory_reminder", message=message)); await db.commit()
+                try: await send_external("Twitch Drops Inventory", message)
+                except Exception: pass
 
 
 async def official_source_sweep() -> None:
@@ -58,3 +65,26 @@ async def channel_sweep() -> None:
                     details={"channel": channel.login, "started_at": stream["started_at"]})); await db.commit()
                 try: await send_external("Rozpoczęła się transmisja WoT", message)
                 except Exception: pass
+
+
+async def browser_sweep() -> None:
+    """Monitor processes only; never inspect browser pages, cookies or its profile."""
+    from app.api.system import browser_request
+    from app.models import AppSetting
+    try:
+        status = await browser_request("GET", "/status")
+    except Exception:
+        status = {"chromium": "unavailable"}
+    async with SessionLocal() as db:
+        state = status.get("chromium", "unavailable")
+        setting = await db.get(AppSetting, "browser_monitor_state")
+        previous = setting.value.get("state", "unknown") if setting else "unknown"
+        if state != "running" and previous == "running":
+            db.add(EventLog(event_type="browser_crashed", level="error",
+                            message="Chromium zakończył działanie — wymagany ręczny restart"))
+            try: await send_external("Przeglądarka VPS", "Chromium zakończył działanie. Uruchom je ręcznie w panelu.")
+            except Exception: pass
+        if not setting:
+            setting = AppSetting(key="browser_monitor_state", value={"state": state}); db.add(setting)
+        else: setting.value = {"state": state}
+        await db.commit()

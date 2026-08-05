@@ -20,8 +20,26 @@ services:
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"], interval: 30s, timeout: 5s, retries: 3}
     security_opt: [no-new-privileges:true]
     logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  browser:
+    build: {context: browser}
+    environment:
+      BROWSER_MANAGER_SECRET: ${BROWSER_MANAGER_SECRET:?set BROWSER_MANAGER_SECRET}
+    volumes:
+      - chromium_profile:/home/browser/.config/chromium
+    ports:
+      - "127.0.0.1:${BROWSER_BIND_PORT:-8767}:6080"
+    networks: [backend]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"], interval: 30s, timeout: 5s, retries: 3}
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
 networks:
   backend:
     name: wot-drops-backend
 volumes:
   postgres_data:
+  chromium_profile:
