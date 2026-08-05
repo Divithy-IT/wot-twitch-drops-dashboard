@@ -1,5 +1,5 @@
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -15,6 +15,26 @@ from app.services.twitch import TwitchClient, TwitchError, oauth_expiry
 
 router = APIRouter(prefix="/oauth/twitch", tags=["twitch"])
 client = TwitchClient()
+
+
+async def valid_access_token(conn: TwitchConnection, db: AsyncSession) -> str:
+    access_token = decrypt_token(conn.access_token_encrypted)
+    expires_at = conn.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at > datetime.now(UTC) + timedelta(minutes=5):
+        return access_token
+    refresh_token = decrypt_token(conn.refresh_token_encrypted)
+    if not refresh_token:
+        raise TwitchError("Brak tokenu odświeżania — połącz konto ponownie")
+    token = await client.refresh(refresh_token)
+    conn.access_token_encrypted = encrypt_token(token["access_token"])
+    if token.get("refresh_token"):
+        conn.refresh_token_encrypted = encrypt_token(token["refresh_token"])
+    conn.expires_at = oauth_expiry(token)
+    conn.scopes = token.get("scope", conn.scopes)
+    await db.commit()
+    return token["access_token"]
 
 
 @router.get("/status")
@@ -67,7 +87,8 @@ async def sync(db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_a
     conn = await db.scalar(select(TwitchConnection))
     if not conn: raise HTTPException(409, "Konto Twitch nie jest połączone")
     try:
-        data = await client.validate(decrypt_token(conn.access_token_encrypted)); conn.scopes = data.get("scopes", [])
+        access_token = await valid_access_token(conn, db)
+        data = await client.validate(access_token); conn.scopes = data.get("scopes") or []
         conn.last_synced_at = datetime.now(UTC); await db.commit()
     except TwitchError as exc:
         db.add(EventLog(event_type="twitch_sync_error", level="error", message=str(exc))); await db.commit()
@@ -83,7 +104,7 @@ async def channel_status(channel: str, db: AsyncSession = Depends(get_db), _: Ad
     if not conn:
         raise HTTPException(409, "Połącz konto Twitch, aby sprawdzać stan kanałów")
     try:
-        stream = await client.stream(decrypt_token(conn.access_token_encrypted), channel)
+        stream = await client.stream(await valid_access_token(conn, db), channel)
     except TwitchError as exc:
         raise HTTPException(502, str(exc)) from exc
     if not stream:
