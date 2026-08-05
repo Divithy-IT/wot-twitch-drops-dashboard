@@ -25,7 +25,7 @@ services:
     environment:
       BROWSER_MANAGER_SECRET: ${BROWSER_MANAGER_SECRET:?set BROWSER_MANAGER_SECRET}
     volumes:
-      - chromium_profile:/home/browser/.config/chromium
+      - firefox_profile:/home/browser/.mozilla/firefox/wot
     ports:
       - "127.0.0.1:${BROWSER_BIND_PORT:-8767}:6080"
     networks: [backend]
@@ -43,3 +43,4 @@ networks:
 volumes:
   postgres_data:
   chromium_profile:
+  firefox_profile:

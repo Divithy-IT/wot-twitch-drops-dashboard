@@ -11,7 +11,7 @@ STARTED = time.monotonic()
 
 def supervisor(action="status"):
     command = ["supervisorctl", "-c", "/etc/supervisor/conf.d/browser.conf"]
-    command += [action, "chromium"] if action != "status" else ["status", "chromium"]
+    command += [action, "browser"] if action != "status" else ["status", "browser"]
     result = subprocess.run(command, capture_output=True, text=True, timeout=25, check=False)
     return result.returncode, (result.stdout or result.stderr).strip()
 
@@ -44,7 +44,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(401, {"detail": "unauthorized"})
         code, output = supervisor()
         running = code == 0 and "RUNNING" in output
-        self.reply(200, {"container": "running", "chromium": "running" if running else "stopped",
+        self.reply(200, {"container": "running", "browser": "running" if running else "stopped",
+                         "browser_name": "Mozilla Firefox",
                          "novnc": "responding", "uptime_seconds": int(time.monotonic() - STARTED),
                          "memory_bytes": memory_bytes()})
 

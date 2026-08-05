@@ -10,7 +10,7 @@ Moduł oglądania używa wyłącznie oficjalnego iframe Twitch z wymaganym param
 
 Moduł `official_sources` odpytuje oficjalny polski sitemap WoT co 6 godzin, używa identyfikującego User-Agentu, ETag/Last-Modified i cache w PostgreSQL. Wyniki trafiają do `detected_events`, nigdy bezpośrednio do kampanii. APScheduler co 5 minut sprawdza zapisane kanały Twitch i deduplikuje powiadomienie dla konkretnego czasu rozpoczęcia transmisji.
 
-Osobny kontener bez uprawnień roota zawiera oficjalny Google Chrome, Xvfb, Openbox, x11vnc i noVNC. Wewnętrzny,
+Osobny kontener bez uprawnień roota zawiera oficjalny Mozilla Firefox, Xvfb, Openbox, x11vnc i noVNC. Wewnętrzny,
 chroniony losowym sekretem manager pozwala backendowi wyłącznie sprawdzić i ręcznie zmienić stan
-procesu Chromium. Backend nie ma dostępu do Docker socket. Nginx używa `auth_request` do sprawdzania
+procesu Firefox. Backend nie ma dostępu do Docker socket. Nginx używa `auth_request` do sprawdzania
 istniejącej sesji administratora przed każdym żądaniem noVNC i WebSocket.

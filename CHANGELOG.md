@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-08-05
+
+- zastąpiono Chrome oficjalnym Mozilla Firefox po odrzuceniu logowania przez mechanizm zgodności Twitcha;
+- zachowano ręczną, trwałą sesję noVNC w nowym, odseparowanym wolumenie profilu;
+- nie zastosowano podmiany User-Agent ani automatyzacji logowania.
+
 ## 0.3.1 — 2026-08-05
 
 - zastąpiono niewspieraną przez Twitch kompilację Debian Chromium oficjalnym Google Chrome;

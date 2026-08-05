@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
-profile=/home/browser/.config/chromium
-for name in SingletonCookie SingletonLock SingletonSocket; do
+profile=/home/browser/.mozilla/firefox/wot
+for name in .parentlock lock; do
     target="$profile/$name"
-    if [ -L "$target" ]; then
+    if [ -e "$target" ] || [ -L "$target" ]; then
         unlink "$target"
     fi
 done

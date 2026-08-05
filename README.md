@@ -17,7 +17,7 @@ Lekki, polskojęzyczny panel dla jednego administratora, który porządkuje kamp
 - kolejka „Wykryte wydarzenia” z pewnością, źródłem, zatwierdzaniem, odrzucaniem i deduplikacją;
 - kalendarz 30 dni i obserwowane kanały z metadanymi Twitch API;
 - log zdarzeń i model deduplikacji powiadomień;
-- FastAPI + React + PostgreSQL oraz opcjonalna trwała sesja Chromium/noVNC;
+- FastAPI + React + PostgreSQL oraz opcjonalna trwała sesja Firefox/noVNC;
 - Docker Compose, healthchecki, migracje Alembic, nginx i CI.
 
 ## Podgląd
@@ -74,7 +74,7 @@ mkdir -p backups
 docker compose exec -T db pg_dump -U wot -Fc wot > "backups/wot-$(date +%F-%H%M).dump"
 ```
 
-Profil Chromium znajduje się wyłącznie w nazwanym wolumenie `wot-drops_chromium_profile` i nie trafia
+Profil Firefox znajduje się wyłącznie w nazwanym wolumenie `wot-drops_firefox_profile` i nie trafia
 do repozytorium ani backupu PostgreSQL. Sekrety istnieją wyłącznie w `.env`.
 
 ## Diagnostyka
@@ -95,7 +95,7 @@ Dokumenty: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [CHAN
 
 ## Trwała przeglądarka VPS
 
-Serwis `browser` uruchamia oficjalny Google Chrome w Xvfb, udostępniony przez noVNC pod `/wot/browser/`.
+Serwis `browser` uruchamia oficjalny Mozilla Firefox w Xvfb, udostępniony przez noVNC pod `/wot/browser/`.
 Dostęp jest chroniony istniejącą sesją administratora; port noVNC jest związany wyłącznie z
 `127.0.0.1:8767`. Kontener ma limit 1 GiB RAM i 1 CPU, nie ma dostępu do Docker socket ani
 katalogów innych usług. Logowanie do Twitcha, uruchomienie transmisji i odbieranie nagród wykonuje

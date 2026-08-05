@@ -59,12 +59,12 @@ async def browser_control(action: str, db: AsyncSession = Depends(get_db), _: Ad
     if action not in {"start", "stop", "restart"}:
         raise HTTPException(422, "Nieprawidłowa operacja")
     result = await browser_request("POST", f"/{action}")
-    db.add(EventLog(event_type=f"browser_{action}", message=f"Chromium: wykonano operację {action}"))
+    db.add(EventLog(event_type=f"browser_{action}", message=f"Firefox: wykonano operację {action}"))
     await db.commit()
     if action == "stop":
         try:
             from app.services.notifications import send_external
-            await send_external("Przeglądarka VPS zatrzymana", "Chromium zostało ręcznie zatrzymane w panelu.")
+            await send_external("Przeglądarka VPS zatrzymana", "Firefox został ręcznie zatrzymany w panelu.")
         except Exception:
             pass
     return result
