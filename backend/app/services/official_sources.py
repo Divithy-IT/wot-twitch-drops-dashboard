@@ -83,6 +83,30 @@ async def fetch(client: httpx.AsyncClient, url: str, cache: SourceCache | None =
     return response.content, dict(response.headers)
 
 
+async def reanalyze_detected_event(db: AsyncSession, item: DetectedEvent) -> DetectedEvent:
+    """Refresh one proposal from its official page without inventing missing facts."""
+    now = datetime.now(UTC)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8)) as client:
+        body, _ = await fetch(client, item.source_url)
+    if body and b"Loading site please wait" not in body[:3000]:
+        parser = MetaParser(); parser.feed(body.decode("utf-8", "ignore"))
+        title = parser.meta.get("og:title") or parser.title
+        summary = parser.meta.get("description") or parser.meta.get("og:description")
+        if title: item.title = title[:300]
+        if summary:
+            clean = re.sub(r"\s+", " ", html.unescape(summary)).strip()
+            item.summary = clean[:2000]; item.excerpt = clean[:700]
+            dates = extract_dates(clean)
+            item.starts_at = dates[0] if dates else None
+            item.ends_at = dates[1] if len(dates) > 1 else None
+        kind, confidence = classify(f"{item.title} {item.summary}")
+        if kind: item.event_type = kind; item.confidence = confidence
+    item.last_checked_at = now
+    db.add(EventLog(event_type="detected_event_reanalyzed", message=f"Ponownie przeanalizowano: {item.title}"))
+    await db.commit(); await db.refresh(item)
+    return item
+
+
 async def sync_official_sources(db: AsyncSession) -> dict:
     now = datetime.now(UTC); created = 0; checked = 0
     cache = await db.get(SourceCache, SITEMAP_URL)

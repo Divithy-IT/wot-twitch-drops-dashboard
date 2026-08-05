@@ -22,7 +22,7 @@ from app.models import (
 )
 from app.security import encrypt_token
 from app.services.notifications import send_external
-from app.services.official_sources import sync_official_sources
+from app.services.official_sources import reanalyze_detected_event, sync_official_sources
 
 router = APIRouter(tags=["events"])
 
@@ -90,6 +90,17 @@ async def approve(event_id: int, data: Approval, db: AsyncSession = Depends(get_
     db.add(campaign); await db.flush(); item.status = DetectionStatus.approved; item.approved_campaign_id = campaign.id
     db.add(EventLog(event_type="detected_event_approved", message=f"Zatwierdzono propozycję: {item.title}"))
     await db.commit(); return {"campaign_id": campaign.id}
+
+
+@router.post("/detected-events/{event_id}/reanalyze")
+async def reanalyze(event_id: int, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    item = await db.get(DetectedEvent, event_id)
+    if not item: raise HTTPException(404, "Nie znaleziono propozycji")
+    try:
+        return detection_json(await reanalyze_detected_event(db, item))
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(502, "Oficjalne źródło jest chwilowo niedostępne") from exc
 
 
 @router.post("/detected-events/{event_id}/{decision}")
