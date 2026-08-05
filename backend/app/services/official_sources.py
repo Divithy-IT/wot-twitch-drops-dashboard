@@ -1,4 +1,5 @@
 import hashlib
+import html
 import re
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
@@ -15,7 +16,8 @@ from app.models import Confidence, DetectedEvent, EventLog, SourceCache
 
 SITEMAP_URL = "https://worldoftanks.eu/sitemap-news-pl-1.xml"
 YOUTUBE_FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCh554z2-7vIA-Mf9qAameoA"
-OFFICIAL_HOSTS = {"worldoftanks.eu", "www.youtube.com"}
+WARGAMING_NEWS_URL = "https://wargaming.com/en/news/"
+OFFICIAL_HOSTS = {"worldoftanks.eu", "www.youtube.com", "wargaming.com"}
 KEYWORDS = {
     "twitch": "drops", "drop": "drops", "stream": "stream", "transmis": "stream",
     "turniej": "tournament", "tournament": "tournament", "onslaught": "onslaught",
@@ -89,7 +91,8 @@ async def sync_official_sources(db: AsyncSession) -> dict:
             content, headers = await fetch(client, SITEMAP_URL, cache)
             if content is None:
                 cache.checked_at = now; cache.last_error = ""; await db.commit()
-                return {"created": 0, "checked": 0, "cached": True}
+                result = {"created": 0, "checked": 0, "cached": True}
+                return merge_results(result, await sync_wargaming_news(db, now))
             digest = hashlib.sha256(content).hexdigest()
             if not cache:
                 cache = SourceCache(url=SITEMAP_URL)
@@ -135,15 +138,25 @@ async def sync_official_sources(db: AsyncSession) -> dict:
             if created:
                 db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych oficjalnych informacji", details={"count": created}))
             await db.commit()
-            return {"created": created, "checked": checked, "cached": False}
+            result = {"created": created, "checked": checked, "cached": False}
+            return merge_results(result, await sync_wargaming_news(db, now))
     except (httpx.HTTPError, ElementTree.ParseError) as exc:
         if not cache: cache = SourceCache(url=SITEMAP_URL); db.add(cache)
         cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
         db.add(EventLog(event_type="official_source_error", level="error", message="Błąd synchronizacji oficjalnego źródła"))
         await db.commit()
         fallback = await sync_youtube_feed(db, now)
+        fallback = merge_results(fallback, await sync_wargaming_news(db, now))
         fallback["portal_error"] = cache.last_error
         return fallback
+
+
+def merge_results(first: dict, second: dict) -> dict:
+    result = dict(first)
+    result["created"] = first.get("created", 0) + second.get("created", 0)
+    result["checked"] = first.get("checked", 0) + second.get("checked", 0)
+    if second.get("error"): result["wargaming_error"] = second["error"]
+    return result
 
 
 async def sync_youtube_feed(db: AsyncSession, now: datetime | None = None) -> dict:
@@ -181,5 +194,41 @@ async def sync_youtube_feed(db: AsyncSession, now: datetime | None = None) -> di
         await db.commit(); return {"created": created, "checked": checked, "cached": False}
     except (httpx.HTTPError, ElementTree.ParseError) as exc:
         if not cache: cache = SourceCache(url=YOUTUBE_FEED_URL); db.add(cache)
+        cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"; await db.commit()
+        return {"created": 0, "checked": 0, "error": cache.last_error}
+
+
+async def sync_wargaming_news(db: AsyncSession, now: datetime | None = None) -> dict:
+    now = now or datetime.now(UTC); cache = await db.get(SourceCache, WARGAMING_NEWS_URL)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8)) as client:
+            content, headers = await fetch(client, WARGAMING_NEWS_URL, cache)
+        if content is None:
+            cache.checked_at = now; cache.last_error = ""; await db.commit()
+            return {"created": 0, "checked": 0, "cached": True}
+        text = content.decode("utf-8", "ignore")
+        if not cache: cache = SourceCache(url=WARGAMING_NEWS_URL); db.add(cache)
+        cache.etag = headers.get("etag", ""); cache.last_modified = headers.get("last-modified", "")
+        cache.content_hash = hashlib.sha256(content).hexdigest(); cache.checked_at = now; cache.last_error = ""
+        created = 0; checked = 0; seen = set()
+        pattern = re.compile(r'<a[^>]+href=["\'](?P<url>/en/news/[^"\']+)["\'][^>]*>(?P<title>.*?)</a>', re.I | re.S)
+        for match in pattern.finditer(text):
+            url = "https://wargaming.com" + match.group("url")
+            title = html.unescape(re.sub(r"<[^>]+>", " ", match.group("title")))
+            title = re.sub(r"\s+", " ", title).strip()
+            if not title or url in seen: continue
+            seen.add(url)
+            if "world of tanks" not in title.lower() and "wot" not in title.lower(): continue
+            kind, confidence = classify(title)
+            if not kind: kind, confidence = "event", Confidence.medium
+            checked += 1
+            if await db.scalar(select(DetectedEvent).where(DetectedEvent.source_url == url)): continue
+            db.add(DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
+                summary="Oficjalny komunikat Wargaming dotyczący World of Tanks.", source_url=url,
+                source_name="Wargaming News", excerpt=title[:700], confidence=confidence,
+                event_type=kind, last_checked_at=now)); created += 1
+        await db.commit(); return {"created": created, "checked": checked, "cached": False}
+    except (httpx.HTTPError, ElementTree.ParseError) as exc:
+        if not cache: cache = SourceCache(url=WARGAMING_NEWS_URL); db.add(cache)
         cache.checked_at = now; cache.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"; await db.commit()
         return {"created": 0, "checked": 0, "error": cache.last_error}
