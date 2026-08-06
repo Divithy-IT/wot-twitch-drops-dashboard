@@ -1,13 +1,10 @@
 import shutil
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_admin, mutation_admin
-from app.config import get_settings
+from app.api.deps import current_admin
 from app.database import get_db
 from app.models import Admin, EventLog
 
@@ -30,52 +27,3 @@ async def disk_status(_: Admin = Depends(current_admin)):
     level = "critical" if percent >= 90 else "warning" if percent >= 85 else "notice" if percent >= 80 else "ok"
     return {"total_bytes": total, "used_bytes": used, "free_bytes": free,
             "used_percent": percent, "level": level, "thresholds": [80, 85, 90]}
-
-
-@router.get("/browser/auth")
-async def browser_auth(_: Admin = Depends(current_admin)):
-    return Response(status_code=204)
-
-
-@router.get("/browser/entry")
-async def browser_entry(_: Admin = Depends(current_admin)):
-    response = RedirectResponse(
-        "/wot/browser/vnc.html?autoconnect=true&resize=scale&path=wot/browser/websockify",
-        status_code=302,
-    )
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-async def browser_request(method: str, path: str) -> dict:
-    settings = get_settings()
-    if not settings.browser_manager_secret:
-        raise HTTPException(503, "Przeglądarka VPS nie jest skonfigurowana")
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(method, f"{settings.browser_manager_url}{path}",
-                headers={"X-Browser-Manager-Secret": settings.browser_manager_secret})
-        response.raise_for_status(); return response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(503, "Kontener przeglądarki nie odpowiada") from exc
-
-
-@router.get("/browser/status")
-async def browser_status(_: Admin = Depends(current_admin)):
-    return await browser_request("GET", "/status")
-
-
-@router.post("/browser/{action}")
-async def browser_control(action: str, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
-    if action not in {"start", "stop", "restart"}:
-        raise HTTPException(422, "Nieprawidłowa operacja")
-    result = await browser_request("POST", f"/{action}")
-    db.add(EventLog(event_type=f"browser_{action}", message=f"Firefox: wykonano operację {action}"))
-    await db.commit()
-    if action == "stop":
-        try:
-            from app.services.notifications import send_external
-            await send_external("Przeglądarka VPS zatrzymana", "Firefox został ręcznie zatrzymany w panelu.")
-        except Exception:
-            pass
-    return result

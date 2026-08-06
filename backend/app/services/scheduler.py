@@ -124,29 +124,6 @@ async def channel_sweep() -> None:
                 except Exception: pass
 
 
-async def browser_sweep() -> None:
-    """Monitor processes only; never inspect browser pages, cookies or its profile."""
-    from app.api.system import browser_request
-    from app.models import AppSetting
-    try:
-        status = await browser_request("GET", "/status")
-    except Exception:
-        status = {"browser": "unavailable"}
-    async with SessionLocal() as db:
-        state = status.get("browser", "unavailable")
-        setting = await db.get(AppSetting, "browser_monitor_state")
-        previous = setting.value.get("state", "unknown") if setting else "unknown"
-        if state != "running" and previous == "running":
-            db.add(EventLog(event_type="browser_crashed", level="error",
-                            message="Firefox zakończył działanie — wymagany ręczny restart"))
-            try: await send_external("Przeglądarka VPS", "Firefox zakończył działanie. Uruchom go ręcznie w panelu.")
-            except Exception: pass
-        if not setting:
-            setting = AppSetting(key="browser_monitor_state", value={"state": state}); db.add(setting)
-        else: setting.value = {"state": state}
-        await db.commit()
-
-
 async def disk_sweep() -> None:
     """Alert at 80/85/90 percent without deleting anything."""
     total, used, free = shutil.disk_usage("/")

@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.api import auth, campaigns, events, system, twitch_oauth
 from app.config import get_settings
-from app.services.scheduler import browser_sweep, channel_sweep, disk_sweep, notification_sweep, official_source_sweep
+from app.services.scheduler import channel_sweep, disk_sweep, notification_sweep, official_source_sweep
 
 settings = get_settings()
 
@@ -22,8 +22,6 @@ async def lifespan(app: FastAPI):
                       id="official-source-sweep", max_instances=1, coalesce=True)
     scheduler.add_job(channel_sweep, "interval", minutes=5,
                       id="channel-sweep", max_instances=1, coalesce=True)
-    scheduler.add_job(browser_sweep, "interval", minutes=1,
-                      id="browser-sweep", max_instances=1, coalesce=True)
     scheduler.add_job(disk_sweep, "interval", minutes=10,
                       id="disk-sweep", max_instances=1, coalesce=True)
     scheduler.start()

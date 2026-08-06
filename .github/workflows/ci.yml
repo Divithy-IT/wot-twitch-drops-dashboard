@@ -25,5 +25,3 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with: {context: ., file: backend/Dockerfile, push: false}
-      - uses: docker/build-push-action@v6
-        with: {context: browser, file: browser/Dockerfile, push: false}
