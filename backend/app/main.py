@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(notification_sweep, "interval", seconds=settings.sync_interval_seconds,
                       id="notification-sweep", max_instances=1, coalesce=True)
-    scheduler.add_job(official_source_sweep, "interval", hours=settings.source_sync_hours,
+    scheduler.add_job(official_source_sweep, "interval", minutes=30,
                       id="official-source-sweep", max_instances=1, coalesce=True)
     scheduler.add_job(channel_sweep, "interval", minutes=5,
                       id="channel-sweep", max_instances=1, coalesce=True)

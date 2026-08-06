@@ -1,10 +1,19 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Campaign, EventLog, TwitchConnection, WatchedChannel
+from app.models import (
+    AppSetting,
+    Campaign,
+    DecisionHistory,
+    DetectedEvent,
+    EventLog,
+    QualificationDecision,
+    TwitchConnection,
+    WatchedChannel,
+)
 from app.security import decrypt_token
 from app.services.notifications import reserve_delivery, send_external
 from app.services.official_sources import sync_official_sources
@@ -43,9 +52,41 @@ async def notification_sweep() -> None:
 
 async def official_source_sweep() -> None:
     async with SessionLocal() as db:
+        now = datetime.now(UTC)
+        state = await db.get(AppSetting, "official_source_schedule")
+        last = datetime.fromisoformat(state.value["last_run"]) if state and state.value.get("last_run") else None
+        candidates = (await db.execute(select(DetectedEvent).where(
+            DetectedEvent.qualification_decision == QualificationDecision.manual_review
+        ))).scalars().all()
+        interval = timedelta(hours=6)
+        if any(x.starts_at and now <= (x.starts_at.replace(tzinfo=UTC) if x.starts_at.tzinfo is None else x.starts_at) <= now + timedelta(hours=24) for x in candidates):
+            interval = timedelta(minutes=30)
+        elif candidates:
+            interval = timedelta(hours=1)
+        if last and now - last < interval: return
         result = await sync_official_sources(db)
+        if not state: state = AppSetting(key="official_source_schedule", value={}); db.add(state)
+        state.value = {"last_run": now.isoformat(), "interval_minutes": int(interval.total_seconds() / 60)}
+        await db.commit()
         if result.get("created"):
             try: await send_external("Nowe oficjalne informacje WoT", f"Wykryto propozycje: {result['created']}")
+            except Exception: pass
+        recent = (await db.execute(select(DecisionHistory).where(
+            DecisionHistory.created_at >= now - timedelta(minutes=10)
+        ))).scalars().all()
+        for decision in recent:
+            key = f"qualification:{decision.id}"
+            if not await reserve_delivery(db, key, "external"): continue
+            item = await db.get(DetectedEvent, decision.detected_event_id)
+            if not item: continue
+            if decision.decision == QualificationDecision.auto_approve:
+                subject = "Automatycznie zatwierdzono kampanię Twitch Drops"
+            elif decision.decision == QualificationDecision.manual_review:
+                subject = "Kampania Twitch Drops wymaga ręcznej decyzji"
+            else:
+                continue
+            if decision.reward_value.value == "high": subject = "Wykryto Drops wysokiej wartości"
+            try: await send_external(subject, f"{item.title}. Wartość: {decision.reward_value.value}. Pewność: {decision.score}/100.")
             except Exception: pass
 
 

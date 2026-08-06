@@ -12,17 +12,21 @@ from app.models import (
     AppSetting,
     Campaign,
     Confidence,
+    DecisionHistory,
     DetectedEvent,
     DetectionStatus,
     EventLog,
     ProgressSource,
+    QualificationDecision,
     Reward,
     SourceType,
+    TrustedSource,
     WatchedChannel,
 )
 from app.security import encrypt_token
 from app.services.notifications import send_external
 from app.services.official_sources import reanalyze_detected_event, sync_official_sources
+from app.services.qualification import DEFAULT_RULES, apply_qualification
 
 router = APIRouter(tags=["events"])
 
@@ -57,7 +61,12 @@ def detection_json(item: DetectedEvent) -> dict:
         "required_minutes": item.required_minutes, "source_url": item.source_url,
         "source_name": item.source_name, "last_checked_at": item.last_checked_at,
         "excerpt": item.excerpt, "confidence": item.confidence, "event_type": item.event_type,
-        "status": item.status, "approved_campaign_id": item.approved_campaign_id}
+        "status": item.status, "approved_campaign_id": item.approved_campaign_id,
+        "qualification_decision": item.qualification_decision, "confidence_score": item.confidence_score,
+        "reward_value": item.reward_value, "matched_keywords": item.matched_keywords,
+        "score_breakdown": item.score_breakdown, "decision_reason": item.decision_reason,
+        "decided_by": item.decided_by, "decided_at": item.decided_at,
+        "source_verified_at": item.source_verified_at}
 
 
 @router.get("/detected-events")
@@ -88,6 +97,12 @@ async def approve(event_id: int, data: Approval, db: AsyncSession = Depends(get_
         source_updated_at=datetime.now(UTC), progress_source=ProgressSource.manual)
     campaign.rewards = [Reward(name=name, required_minutes=data.required_minutes) for name in data.rewards]
     db.add(campaign); await db.flush(); item.status = DetectionStatus.approved; item.approved_campaign_id = campaign.id
+    item.qualification_decision = QualificationDecision.auto_approve
+    item.decided_by = "administrator"; item.decided_at = datetime.now(UTC)
+    db.add(DecisionHistory(detected_event_id=item.id, decision=QualificationDecision.auto_approve,
+        score=item.confidence_score, reward_value=item.reward_value, reason="Ręczne zatwierdzenie administratora",
+        score_breakdown=item.score_breakdown, matched_keywords=item.matched_keywords,
+        actor="administrator", action="manual_approve"))
     db.add(EventLog(event_type="detected_event_approved", message=f"Zatwierdzono propozycję: {item.title}"))
     await db.commit(); return {"campaign_id": campaign.id}
 
@@ -103,14 +118,110 @@ async def reanalyze(event_id: int, db: AsyncSession = Depends(get_db), _: Admin 
         raise HTTPException(502, "Oficjalne źródło jest chwilowo niedostępne") from exc
 
 
+@router.post("/detected-events/{event_id}/undo")
+async def undo_decision(event_id: int, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    item = await db.get(DetectedEvent, event_id)
+    if not item: raise HTTPException(404, "Nie znaleziono propozycji")
+    if item.approved_campaign_id:
+        campaign = await db.get(Campaign, item.approved_campaign_id)
+        if campaign and campaign.auto_approved: await db.delete(campaign)
+        elif campaign: raise HTTPException(409, "Ręcznie utworzonej kampanii nie można cofnąć tym przyciskiem")
+    item.status = DetectionStatus.pending; item.approved_campaign_id = None
+    item.qualification_decision = QualificationDecision.manual_review
+    item.decision_reason = "Decyzja cofnięta przez administratora"; item.decided_by = "administrator"
+    db.add(DecisionHistory(detected_event_id=item.id, decision=QualificationDecision.manual_review,
+        score=item.confidence_score, reward_value=item.reward_value, reason=item.decision_reason,
+        score_breakdown=item.score_breakdown, matched_keywords=item.matched_keywords,
+        actor="administrator", action="undo"))
+    await db.commit(); return {"ok": True}
+
+
+@router.post("/detected-events/{event_id}/qualify")
+async def qualify_again(event_id: int, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    item = await db.get(DetectedEvent, event_id)
+    if not item: raise HTTPException(404, "Nie znaleziono propozycji")
+    result = await apply_qualification(db, item, "administrator")
+    await db.commit(); return {"decision": result.decision, "score": result.score}
+
+
 @router.post("/detected-events/{event_id}/{decision}")
 async def decide(event_id: int, decision: str, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
     if decision not in {"reject", "duplicate"}: raise HTTPException(422, "Nieprawidłowa decyzja")
     item = await db.get(DetectedEvent, event_id)
     if not item: raise HTTPException(404, "Nie znaleziono propozycji")
     item.status = DetectionStatus.rejected if decision == "reject" else DetectionStatus.duplicate
+    item.qualification_decision = QualificationDecision.auto_ignore
+    item.decision_reason = "Odrzucono ręcznie" if decision == "reject" else "Oznaczono jako duplikat"
+    item.decided_by = "administrator"; item.decided_at = datetime.now(UTC)
+    db.add(DecisionHistory(detected_event_id=item.id, decision=QualificationDecision.auto_ignore,
+        score=item.confidence_score, reward_value=item.reward_value, reason=item.decision_reason,
+        score_breakdown=item.score_breakdown, matched_keywords=item.matched_keywords,
+        actor="administrator", action=decision))
     db.add(EventLog(event_type=f"detected_event_{decision}", message=f"Zmieniono propozycję: {item.title}"))
     await db.commit(); return {"ok": True}
+
+
+class TrustedSourceIn(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    url_pattern: HttpUrl
+    enabled: bool = True
+    auto_approve: bool = True
+    max_trust_score: int = Field(default=100, ge=0, le=100)
+    ignored: bool = False
+
+
+@router.get("/trusted-sources")
+async def trusted_sources(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
+    rows = (await db.execute(select(TrustedSource).order_by(TrustedSource.name))).scalars().all()
+    return [{"id": x.id, "name": x.name, "url_pattern": x.url_pattern, "enabled": x.enabled,
+             "auto_approve": x.auto_approve, "max_trust_score": x.max_trust_score, "ignored": x.ignored} for x in rows]
+
+
+@router.post("/trusted-sources", status_code=201)
+async def add_trusted_source(data: TrustedSourceIn, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    url = str(data.url_pattern)
+    if await db.scalar(select(TrustedSource).where(TrustedSource.url_pattern == url)): raise HTTPException(409, "Źródło już istnieje")
+    db.add(TrustedSource(**data.model_dump(exclude={"url_pattern"}), url_pattern=url)); await db.commit(); return {"ok": True}
+
+
+@router.put("/trusted-sources/{source_id}")
+async def update_trusted_source(source_id: int, data: TrustedSourceIn, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    row = await db.get(TrustedSource, source_id)
+    if not row: raise HTTPException(404, "Nie znaleziono źródła")
+    for key, value in data.model_dump().items(): setattr(row, key, str(value) if key == "url_pattern" else value)
+    await db.commit(); return {"ok": True}
+
+
+@router.delete("/trusted-sources/{source_id}")
+async def delete_trusted_source(source_id: int, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    row = await db.get(TrustedSource, source_id)
+    if not row: raise HTTPException(404, "Nie znaleziono źródła")
+    await db.delete(row); await db.commit(); return {"ok": True}
+
+
+@router.get("/qualification/settings")
+async def qualification_settings(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
+    row = await db.get(AppSetting, "drop_qualification_rules")
+    return {**DEFAULT_RULES, **(row.value if row else {})}
+
+
+@router.put("/qualification/settings")
+async def save_qualification_settings(data: dict, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    allowed = set(DEFAULT_RULES); clean = {k: v for k, v in data.items() if k in allowed}
+    approve = int(clean.get("approve_threshold", 85)); review = int(clean.get("review_threshold", 55))
+    if not 0 <= review <= approve <= 100: raise HTTPException(422, "Nieprawidłowe progi punktacji")
+    row = await db.get(AppSetting, "drop_qualification_rules")
+    if not row: row = AppSetting(key="drop_qualification_rules", value={}); db.add(row)
+    row.value = {**DEFAULT_RULES, **clean}; await db.commit(); return row.value
+
+
+@router.get("/decision-history")
+async def decision_history(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
+    rows = (await db.execute(select(DecisionHistory).order_by(DecisionHistory.created_at.desc()).limit(300))).scalars().all()
+    return [{"id": x.id, "detected_event_id": x.detected_event_id, "decision": x.decision,
+             "score": x.score, "reward_value": x.reward_value, "reason": x.reason,
+             "score_breakdown": x.score_breakdown, "matched_keywords": x.matched_keywords,
+             "actor": x.actor, "action": x.action, "created_at": x.created_at} for x in rows]
 
 
 @router.post("/sources/sync")

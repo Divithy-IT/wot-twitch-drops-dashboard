@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
-from app.models import ProgressSource, SourceType
+from app.models import ProgressSource, RewardValue, SourceType
 
 
 class RewardIn(BaseModel):
@@ -54,6 +54,11 @@ class CampaignOut(BaseModel):
     source_updated_at: datetime
     progress_source: ProgressSource
     last_progress_at: datetime | None
+    confidence_score: int
+    reward_value: RewardValue
+    auto_approved: bool
+    verification_reason: str
+    verified_at: datetime | None
     rewards: list[RewardOut]
 
 

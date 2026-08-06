@@ -26,6 +26,19 @@ class DetectionStatus(str, enum.Enum):
     duplicate = "duplicate"
 
 
+class QualificationDecision(str, enum.Enum):
+    auto_approve = "auto_approve"
+    manual_review = "manual_review"
+    auto_ignore = "auto_ignore"
+
+
+class RewardValue(str, enum.Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+    unknown = "unknown"
+
+
 class Confidence(str, enum.Enum):
     low = "low"
     medium = "medium"
@@ -58,6 +71,11 @@ class Campaign(Base):
     watched_minutes: Mapped[int] = mapped_column(Integer, default=0)
     progress_source: Mapped[ProgressSource] = mapped_column(Enum(ProgressSource), default=ProgressSource.manual)
     last_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confidence_score: Mapped[int] = mapped_column(Integer, default=0)
+    reward_value: Mapped[RewardValue] = mapped_column(Enum(RewardValue), default=RewardValue.unknown)
+    auto_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    verification_reason: Mapped[str] = mapped_column(Text, default="")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rewards: Mapped[list["Reward"]] = relationship(back_populates="campaign", cascade="all, delete-orphan", lazy="selectin")
 
 
@@ -129,6 +147,45 @@ class DetectedEvent(Base):
     event_type: Mapped[str] = mapped_column(String(50), default="event")
     status: Mapped[DetectionStatus] = mapped_column(Enum(DetectionStatus), default=DetectionStatus.pending)
     approved_campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True)
+    qualification_decision: Mapped[QualificationDecision] = mapped_column(
+        Enum(QualificationDecision), default=QualificationDecision.manual_review
+    )
+    confidence_score: Mapped[int] = mapped_column(Integer, default=0)
+    reward_value: Mapped[RewardValue] = mapped_column(Enum(RewardValue), default=RewardValue.unknown)
+    matched_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    score_breakdown: Mapped[list] = mapped_column(JSON, default=list)
+    decision_reason: Mapped[str] = mapped_column(Text, default="")
+    decided_by: Mapped[str] = mapped_column(String(30), default="automation")
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_content_hash: Mapped[str] = mapped_column(String(64), default="")
+
+
+class TrustedSource(Base):
+    __tablename__ = "trusted_sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    url_pattern: Mapped[str] = mapped_column(String(600), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_approve: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_trust_score: Mapped[int] = mapped_column(Integer, default=100)
+    ignored: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class DecisionHistory(Base):
+    __tablename__ = "decision_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detected_event_id: Mapped[int] = mapped_column(ForeignKey("detected_events.id", ondelete="CASCADE"), index=True)
+    decision: Mapped[QualificationDecision] = mapped_column(Enum(QualificationDecision))
+    score: Mapped[int] = mapped_column(Integer)
+    reward_value: Mapped[RewardValue] = mapped_column(Enum(RewardValue))
+    reason: Mapped[str] = mapped_column(Text)
+    score_breakdown: Mapped[list] = mapped_column(JSON, default=list)
+    matched_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    actor: Mapped[str] = mapped_column(String(30), default="automation")
+    action: Mapped[str] = mapped_column(String(60), default="decision")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
 
 
 class SourceCache(Base):

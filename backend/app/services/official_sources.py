@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import Confidence, DetectedEvent, EventLog, SourceCache
+from app.services.qualification import apply_qualification, extract_reward_mentions
 
 SITEMAP_URL = "https://worldoftanks.eu/sitemap-news-pl-1.xml"
 YOUTUBE_FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCh554z2-7vIA-Mf9qAameoA"
@@ -31,7 +32,7 @@ KEYWORDS = {
 
 class MetaParser(HTMLParser):
     def __init__(self):
-        super().__init__(); self.meta = {}; self.title = ""; self._title = False
+        super().__init__(); self.meta = {}; self.title = ""; self._title = False; self.text_parts = []
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         if tag == "meta":
@@ -42,6 +43,8 @@ class MetaParser(HTMLParser):
         if tag == "title": self._title = False
     def handle_data(self, data):
         if self._title: self.title += data.strip()
+        clean = re.sub(r"\s+", " ", data).strip()
+        if clean: self.text_parts.append(clean)
 
 
 def classify(text: str) -> tuple[str | None, Confidence]:
@@ -99,9 +102,15 @@ async def reanalyze_detected_event(db: AsyncSession, item: DetectedEvent) -> Det
             dates = extract_dates(clean)
             item.starts_at = dates[0] if dates else None
             item.ends_at = dates[1] if len(dates) > 1 else None
-        kind, confidence = classify(f"{item.title} {item.summary}")
+        visible = " ".join(parser.text_parts)[:12000]
+        if visible: item.excerpt = visible[:4000]
+        item.probable_rewards = extract_reward_mentions(visible)
+        kind, confidence = classify(f"{item.title} {item.summary} {visible}")
         if kind: item.event_type = kind; item.confidence = confidence
+        minutes = re.search(r"(?:oglądaj|watch)[^.!?]{0,60}(\d{1,4})\s*(?:minut|min|minutes?)", visible, re.I)
+        if minutes: item.required_minutes = int(minutes.group(1))
     item.last_checked_at = now
+    await apply_qualification(db, item)
     db.add(EventLog(event_type="detected_event_reanalyzed", message=f"Ponownie przeanalizowano: {item.title}"))
     await db.commit(); await db.refresh(item)
     return item
@@ -150,14 +159,19 @@ async def sync_official_sources(db: AsyncSession) -> dict:
                         parser = MetaParser(); parser.feed(body.decode("utf-8", "ignore"))
                         title = parser.meta.get("og:title") or parser.title or title
                         summary = parser.meta.get("description") or parser.meta.get("og:description") or summary
-                        excerpt = summary[:700]; dates = extract_dates(summary)
+                        visible = " ".join(parser.text_parts)[:12000]
+                        excerpt = visible[:4000] or summary[:700]; dates = extract_dates(visible or summary)
                 except (httpx.HTTPError, ValueError):
                     pass
                 fingerprint = hashlib.sha256(url.rstrip("/").lower().encode()).hexdigest()
-                db.add(DetectedEvent(fingerprint=fingerprint, title=title[:300], summary=summary[:2000],
+                item = DetectedEvent(fingerprint=fingerprint, title=title[:300], summary=summary[:2000],
                     published_at=published, starts_at=dates[0] if dates else None,
                     ends_at=dates[1] if len(dates)>1 else None, source_url=url, excerpt=excerpt,
-                    confidence=confidence, event_type=kind, last_checked_at=now))
+                    confidence=confidence, event_type=kind, last_checked_at=now)
+                item.probable_rewards = extract_reward_mentions(excerpt)
+                minutes = re.search(r"(?:oglądaj|watch)[^.!?]{0,60}(\d{1,4})\s*(?:minut|min|minutes?)", excerpt, re.I)
+                if minutes: item.required_minutes = int(minutes.group(1))
+                db.add(item); await db.flush(); await apply_qualification(db, item)
                 created += 1
             if created:
                 db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych oficjalnych informacji", details={"count": created}))
@@ -209,11 +223,12 @@ async def sync_youtube_feed(db: AsyncSession, now: datetime | None = None) -> di
             published_text = entry.findtext("a:published", namespaces=ns)
             published = datetime.fromisoformat(published_text.replace("Z", "+00:00")) if published_text else None
             dates = extract_dates(description); excerpt = re.sub(r"\s+", " ", description).strip()[:700]
-            db.add(DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
+            item = DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
                 summary=excerpt[:2000], published_at=published, starts_at=dates[0] if dates else None,
                 ends_at=dates[1] if len(dates)>1 else None, source_url=url,
                 source_name="World of Tanks — oficjalny kanał YouTube", excerpt=excerpt,
-                confidence=confidence, event_type=kind, last_checked_at=now)); created += 1
+                confidence=confidence, event_type=kind, last_checked_at=now)
+            db.add(item); await db.flush(); await apply_qualification(db, item); created += 1
         if created: db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych komunikatów oficjalnego kanału WoT"))
         await db.commit(); return {"created": created, "checked": checked, "cached": False}
     except (httpx.HTTPError, ElementTree.ParseError) as exc:
@@ -247,10 +262,11 @@ async def sync_wargaming_news(db: AsyncSession, now: datetime | None = None) -> 
             if not kind: kind, confidence = "event", Confidence.medium
             checked += 1
             if await db.scalar(select(DetectedEvent).where(DetectedEvent.source_url == url)): continue
-            db.add(DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
+            item = DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
                 summary="Oficjalny komunikat Wargaming dotyczący World of Tanks.", source_url=url,
                 source_name="Wargaming News", excerpt=title[:700], confidence=confidence,
-                event_type=kind, last_checked_at=now)); created += 1
+                event_type=kind, last_checked_at=now)
+            db.add(item); await db.flush(); await apply_qualification(db, item); created += 1
         await db.commit(); return {"created": created, "checked": checked, "cached": False}
     except (httpx.HTTPError, ElementTree.ParseError) as exc:
         if not cache: cache = SourceCache(url=WARGAMING_NEWS_URL); db.add(cache)
