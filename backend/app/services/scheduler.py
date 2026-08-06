@@ -1,3 +1,4 @@
+import shutil
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -144,3 +145,21 @@ async def browser_sweep() -> None:
             setting = AppSetting(key="browser_monitor_state", value={"state": state}); db.add(setting)
         else: setting.value = {"state": state}
         await db.commit()
+
+
+async def disk_sweep() -> None:
+    """Alert at 80/85/90 percent without deleting anything."""
+    total, used, free = shutil.disk_usage("/")
+    percent = used * 100 / total
+    threshold = 90 if percent >= 90 else 85 if percent >= 85 else 80 if percent >= 80 else 0
+    if not threshold: return
+    now = datetime.now(UTC)
+    async with SessionLocal() as db:
+        key = f"disk:{threshold}:{now.date().isoformat()}"
+        if not await reserve_delivery(db, key, "in_app"): return
+        message = f"Dysk VPS wykorzystany w {percent:.1f}% — wolne {free / 1024**3:.1f} GiB."
+        db.add(EventLog(event_type="disk_usage_alert", level="error" if threshold >= 90 else "warning",
+                        message=message, details={"percent": round(percent, 1), "threshold": threshold}))
+        await db.commit()
+        try: await send_external(f"Alert dysku VPS: próg {threshold}%", message)
+        except Exception: pass

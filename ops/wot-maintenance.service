@@ -1,0 +1,10 @@
+[Unit]
+Description=WoT dashboard backup retention and safe disk report
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wot-twitch-drops-dashboard/ops/wot-maintenance.sh
+Nice=10
+IOSchedulingClass=idle

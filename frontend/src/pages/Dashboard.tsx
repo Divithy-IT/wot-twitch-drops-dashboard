@@ -7,13 +7,15 @@ import { Radio, RefreshCw, AlertTriangle } from "lucide-react";
 export default function Dashboard() {
   const [c, setC] = useState<Campaign[]>([]),
     [tw, setTw] = useState<any>({ connected: false }),
+    [disk, setDisk] = useState<any>(null),
     [err, setErr] = useState("");
   const load = useCallback(
     () =>
-      Promise.all([api<Campaign[]>("/campaigns"), api("/oauth/twitch/status")])
-        .then(([a, b]) => {
+      Promise.all([api<Campaign[]>("/campaigns"), api("/oauth/twitch/status"), api("/disk/status")])
+        .then(([a, b, d]) => {
           setC(a);
           setTw(b);
+          setDisk(d);
           setErr("");
         })
         .catch((e) => setErr(e.message)),
@@ -60,6 +62,9 @@ export default function Dashboard() {
           {err}
         </div>
       )}
+      {disk && disk.used_percent >= 80 && <div className={`notice ${disk.used_percent >= 90 ? "error" : ""}`}>
+        <AlertTriangle /> Dysk VPS: {disk.used_percent}% zajęte, wolne {(disk.free_bytes / 1024 / 1024 / 1024).toFixed(1)} GiB.
+      </div>}
       <section className="status-grid">
         <div className="status-card">
           <i className={tw.connected ? "green" : "red"} />

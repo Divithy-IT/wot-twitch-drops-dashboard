@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily WoT dashboard backup and safe cache maintenance
+
+[Timer]
+OnCalendar=*-*-* 03:25:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
