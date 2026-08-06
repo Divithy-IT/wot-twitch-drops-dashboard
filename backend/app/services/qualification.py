@@ -178,6 +178,8 @@ async def apply_qualification(db: AsyncSession, item: DetectedEvent, actor: str 
         campaign = await db.get(Campaign, item.approved_campaign_id)
         if campaign and campaign.auto_approved:
             changed = []
+            if item.title and campaign.title != item.title[:200]:
+                campaign.title = item.title[:200]; changed.append("title")
             for field_name in ("starts_at", "ends_at", "required_minutes"):
                 value = getattr(item, field_name)
                 if value is not None and value != getattr(campaign, field_name):
