@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_admin, mutation_admin
@@ -144,6 +144,25 @@ async def qualify_again(event_id: int, db: AsyncSession = Depends(get_db), _: Ad
     await db.commit(); return {"decision": result.decision, "score": result.score}
 
 
+@router.post("/detected-events/bulk/ignore-streams")
+async def ignore_plain_streams(db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    rows = (await db.execute(select(DetectedEvent).where(DetectedEvent.status == DetectionStatus.pending))).scalars().all()
+    ignored = 0
+    drops_phrases = ("twitch drops", "drops enabled", "drops inventory", "odbierz drop", "nagrody za oglądanie")
+    for item in rows:
+        text = f"{item.title} {item.summary} {item.excerpt}".lower()
+        plain_stream = item.event_type == "stream" or any(x in text for x in ("stream", "transmis", " live "))
+        if not plain_stream or any(x in text for x in drops_phrases): continue
+        item.status = DetectionStatus.rejected; item.qualification_decision = QualificationDecision.auto_ignore
+        item.decision_reason = "Zbiorczo zignorowano transmisję bez literalnej wzmianki o Twitch Drops"
+        item.decided_by = "administrator"; item.decided_at = datetime.now(UTC); ignored += 1
+        db.add(DecisionHistory(detected_event_id=item.id, decision=QualificationDecision.auto_ignore,
+            score=item.confidence_score, reward_value=item.reward_value, reason=item.decision_reason,
+            score_breakdown=item.score_breakdown, matched_keywords=item.matched_keywords,
+            actor="administrator", action="bulk_ignore_plain_stream"))
+    await db.commit(); return {"ignored": ignored}
+
+
 @router.post("/detected-events/{event_id}/{decision}")
 async def decide(event_id: int, decision: str, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
     if decision not in {"reject", "duplicate"}: raise HTTPException(422, "Nieprawidłowa decyzja")
@@ -236,7 +255,10 @@ async def source_sync(db: AsyncSession = Depends(get_db), _: Admin = Depends(mut
 @router.get("/calendar")
 async def calendar(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
     now = datetime.now(UTC); end = now + timedelta(days=30); result = []
-    campaigns = (await db.execute(select(Campaign).where(Campaign.ends_at >= now, Campaign.starts_at <= end))).scalars().all()
+    campaigns = (await db.execute(select(Campaign).where(
+        or_(Campaign.ends_at.is_(None), Campaign.ends_at >= now),
+        or_(Campaign.starts_at.is_(None), Campaign.starts_at <= end),
+    ))).scalars().all()
     for item in campaigns:
         result.append({"id": f"campaign-{item.id}", "title": item.title, "type": "drops", "source": item.source_type,
                        "starts_at": item.starts_at, "ends_at": item.ends_at, "status": "confirmed", "url": item.link_url})
@@ -245,7 +267,7 @@ async def calendar(db: AsyncSession = Depends(get_db), _: Admin = Depends(curren
     for item in detected:
         result.append({"id": f"detected-{item.id}", "title": item.title, "type": item.event_type, "source": "automatic",
                        "starts_at": item.starts_at, "ends_at": item.ends_at, "status": "pending", "url": item.source_url})
-    return sorted(result, key=lambda x: x["starts_at"])
+    return sorted(result, key=lambda x: x["starts_at"] or datetime.max.replace(tzinfo=UTC))
 
 
 class ChannelIn(BaseModel):

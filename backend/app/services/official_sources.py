@@ -20,7 +20,7 @@ YOUTUBE_FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCh554z2
 WARGAMING_NEWS_URL = "https://wargaming.com/en/news/"
 OFFICIAL_HOSTS = {"worldoftanks.eu", "www.youtube.com", "wargaming.com"}
 KEYWORDS = {
-    "twitch": "drops", "drop": "drops", "stream": "stream", "transmis": "stream",
+    "twitch": "stream", "drop": "drops", "stream": "stream", "transmis": "stream",
     "turniej": "tournament", "tournament": "tournament", "onslaught": "onslaught",
     "frontline": "frontline", "linia-frontu": "frontline", "battle-pass": "battle_pass",
     "przepust": "battle_pass", "arcade": "arcade", "rocznic": "anniversary",
@@ -91,7 +91,7 @@ async def reanalyze_detected_event(db: AsyncSession, item: DetectedEvent) -> Det
     now = datetime.now(UTC)
     async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8)) as client:
         body, _ = await fetch(client, item.source_url)
-    if body and b"Loading site please wait" not in body[:3000]:
+    if body:
         parser = MetaParser(); parser.feed(body.decode("utf-8", "ignore"))
         title = parser.meta.get("og:title") or parser.title
         summary = parser.meta.get("description") or parser.meta.get("og:description")
@@ -155,7 +155,7 @@ async def sync_official_sources(db: AsyncSession) -> dict:
                 dates = []
                 try:
                     body, _ = await fetch(client, url)
-                    if body and b"Loading site please wait" not in body[:3000]:
+                    if body:
                         parser = MetaParser(); parser.feed(body.decode("utf-8", "ignore"))
                         title = parser.meta.get("og:title") or parser.title or title
                         summary = parser.meta.get("description") or parser.meta.get("og:description") or summary

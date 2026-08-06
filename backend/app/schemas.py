@@ -42,9 +42,9 @@ class CampaignOut(BaseModel):
     id: int
     title: str
     description: str
-    starts_at: datetime
-    ends_at: datetime
-    required_minutes: int
+    starts_at: datetime | None
+    ends_at: datetime | None
+    required_minutes: int | None
     watched_minutes: int
     eligible_channels: list[str]
     category_name: str

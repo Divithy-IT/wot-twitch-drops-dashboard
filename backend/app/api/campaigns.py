@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,6 +18,10 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 def status_of(c: Campaign, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
+    if c.starts_at is None: return "confirmed"
+    if c.ends_at is None:
+        starts_at = c.starts_at.replace(tzinfo=UTC) if c.starts_at.tzinfo is None else c.starts_at
+        return "upcoming" if now < starts_at else "active"
     starts_at = c.starts_at.replace(tzinfo=UTC) if c.starts_at.tzinfo is None else c.starts_at
     ends_at = c.ends_at.replace(tzinfo=UTC) if c.ends_at.tzinfo is None else c.ends_at
     return "upcoming" if now < starts_at else "active" if now < ends_at else "ended"
@@ -25,7 +29,9 @@ def status_of(c: Campaign, now: datetime | None = None) -> str:
 
 def seconds_remaining(c: Campaign, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
+    if c.starts_at is None: return 0
     starts_at = c.starts_at.replace(tzinfo=UTC) if c.starts_at.tzinfo is None else c.starts_at
+    if c.ends_at is None: return max(0, int((starts_at - now).total_seconds()))
     ends_at = c.ends_at.replace(tzinfo=UTC) if c.ends_at.tzinfo is None else c.ends_at
     target = starts_at if now < starts_at else ends_at
     return max(0, int((target - now).total_seconds()))
@@ -42,7 +48,8 @@ async def fetch(db: AsyncSession, campaign_id: int) -> Campaign:
 async def list_campaigns(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
     now = datetime.now(UTC)
     rows = (await db.execute(select(Campaign).options(selectinload(Campaign.rewards)).where(
-        Campaign.ends_at >= now - timedelta(days=90), Campaign.starts_at <= now + timedelta(days=30)
+        or_(Campaign.ends_at.is_(None), Campaign.ends_at >= now - timedelta(days=90)),
+        or_(Campaign.starts_at.is_(None), Campaign.starts_at <= now + timedelta(days=30))
     ).order_by(Campaign.starts_at))).scalars().unique().all()
     return [{**CampaignOut.model_validate(c).model_dump(mode="json"), "status": status_of(c),
              "seconds_remaining": seconds_remaining(c)} for c in rows]

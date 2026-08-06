@@ -32,6 +32,7 @@ async def notification_sweep() -> None:
             for kind, (field, offset, message) in WINDOWS.items():
                 if kind not in enabled: continue
                 target = getattr(campaign, field)
+                if target is None: continue
                 if target.tzinfo is None: target = target.replace(tzinfo=UTC)
                 if -60 < (target - now).total_seconds() - offset <= 60:
                     key = f"campaign:{campaign.id}:{kind}"

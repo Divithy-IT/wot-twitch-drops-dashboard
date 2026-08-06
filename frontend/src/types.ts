@@ -1,2 +1,32 @@
-export type Reward={id:number,name:string,required_minutes:number,earned:boolean,claimed:boolean};
-export type Campaign={id:number,title:string,description:string,starts_at:string,ends_at:string,required_minutes:number,watched_minutes:number,eligible_channels:string[],category_name:string,link_url:string,source_type:'twitch'|'wargaming'|'manual',source_url:string,source_updated_at:string,progress_source:'official'|'manual'|'estimated',last_progress_at:string|null,rewards:Reward[],status:'active'|'upcoming'|'ended',seconds_remaining:number,confidence_score:number,reward_value:'high'|'medium'|'low'|'unknown',auto_approved:boolean,verification_reason:string,verified_at:string|null};
+export type Reward = {
+  id: number;
+  name: string;
+  required_minutes: number;
+  earned: boolean;
+  claimed: boolean;
+};
+export type Campaign = {
+  id: number;
+  title: string;
+  description: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  required_minutes: number | null;
+  watched_minutes: number;
+  eligible_channels: string[];
+  category_name: string;
+  link_url: string;
+  source_type: "twitch" | "wargaming" | "manual";
+  source_url: string;
+  source_updated_at: string;
+  progress_source: "official" | "manual" | "estimated";
+  last_progress_at: string | null;
+  rewards: Reward[];
+  status: "active" | "upcoming" | "ended" | "confirmed";
+  seconds_remaining: number;
+  confidence_score: number;
+  reward_value: "high" | "medium" | "low" | "unknown";
+  auto_approved: boolean;
+  verification_reason: string;
+  verified_at: string | null;
+};
