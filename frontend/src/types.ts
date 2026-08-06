@@ -29,4 +29,6 @@ export type Campaign = {
   auto_approved: boolean;
   verification_reason: string;
   verified_at: string | null;
+  freshness_status: "active" | "upcoming" | "recent_announcement" | "unknown_date_recent" | "historical" | "reference_document";
+  archived: boolean;
 };

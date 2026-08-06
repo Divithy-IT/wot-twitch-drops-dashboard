@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import Confidence, DetectedEvent, EventLog, SourceCache
+from app.services.freshness import MONTHS
 from app.services.qualification import apply_qualification, extract_reward_mentions
 
 SITEMAP_URL = "https://worldoftanks.eu/sitemap-news-pl-1.xml"
@@ -61,7 +62,7 @@ def title_from_url(url: str) -> str:
     return " ".join(word.capitalize() for word in slug.replace("_", "-").split("-") if not word.isdigit())
 
 
-def extract_dates(text: str) -> list[datetime]:
+def extract_dates(text: str, now: datetime | None = None) -> list[datetime]:
     results = []
     warsaw = ZoneInfo("Europe/Warsaw")
     patterns = [r"\b(20\d{2})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})\b",
@@ -72,6 +73,15 @@ def extract_dates(text: str) -> list[datetime]:
             year, month, day, hour, minute = values if index == 0 else (values[2], values[1], values[0], values[3], values[4])
             try: results.append(datetime(year, month, day, hour, minute, tzinfo=warsaw).astimezone(UTC))
             except ValueError: continue
+    month_names = "|".join(sorted((re.escape(x) for x in MONTHS), key=len, reverse=True))
+    for match in re.finditer(rf"\b(\d{{1,2}})\s+({month_names})(?:\s+(20\d{{2}}))?(?:\s+(?:o|at)?\s*(\d{{1,2}})[:.]([0-5]\d))?", text, re.I):
+        day, name, year, hour, minute = match.groups()
+        # A missing year means the current year. Never roll a past month into next year.
+        year = int(year) if year else (now or datetime.now(UTC)).year
+        try:
+            results.append(datetime(year, MONTHS[name.lower()], int(day), int(hour or 0), int(minute or 0), tzinfo=warsaw).astimezone(UTC))
+        except ValueError:
+            continue
     return sorted(set(results))
 
 
@@ -101,9 +111,11 @@ async def reanalyze_detected_event(db: AsyncSession, item: DetectedEvent) -> Det
         if summary:
             clean = re.sub(r"\s+", " ", html.unescape(summary)).strip()
             item.summary = clean[:2000]; item.excerpt = clean[:700]
-            dates = extract_dates(clean)
+            dates = extract_dates(clean, now)
             item.starts_at = dates[0] if dates else None
             item.ends_at = dates[1] if len(dates) > 1 else None
+            item.detected_date_text = ", ".join(x.isoformat() for x in dates)
+            item.date_confidence = "exact" if dates else "none"
         visible = " ".join(parser.text_parts)[:12000]
         if visible: item.excerpt = visible[:4000]
         item.probable_rewards = extract_reward_mentions(visible)
@@ -144,7 +156,8 @@ async def sync_official_sources(db: AsyncSession) -> dict:
                 if not kind or not modified: continue
                 try: published = datetime.fromisoformat(modified).replace(tzinfo=UTC)
                 except ValueError: continue
-                if published < now - timedelta(days=45): continue
+                # Detection window: seven days back. Older pages are not fetched as current proposals.
+                if published < now - timedelta(days=7): continue
                 candidates.append((url, published, kind, confidence))
             for url, published, kind, confidence in candidates[:30]:
                 checked += 1
@@ -162,14 +175,16 @@ async def sync_official_sources(db: AsyncSession) -> dict:
                         title = parser.meta.get("og:title") or parser.title or title
                         summary = parser.meta.get("description") or parser.meta.get("og:description") or summary
                         visible = " ".join(parser.text_parts)[:12000]
-                        excerpt = visible[:4000] or summary[:700]; dates = extract_dates(visible or summary)
+                        excerpt = visible[:4000] or summary[:700]; dates = extract_dates(visible or summary, now)
                 except (httpx.HTTPError, ValueError):
                     pass
                 fingerprint = hashlib.sha256(url.rstrip("/").lower().encode()).hexdigest()
                 item = DetectedEvent(fingerprint=fingerprint, title=title[:300], summary=summary[:2000],
                     published_at=published, starts_at=dates[0] if dates else None,
                     ends_at=dates[1] if len(dates)>1 else None, source_url=url, excerpt=excerpt,
-                    confidence=confidence, event_type=kind, last_checked_at=now)
+                    confidence=confidence, event_type=kind, last_checked_at=now,
+                    detected_date_text=", ".join(x.isoformat() for x in dates),
+                    date_confidence="exact" if dates else "none")
                 item.probable_rewards = extract_reward_mentions(excerpt)
                 minutes = re.search(r"(?:oglądaj|watch)[^.!?]{0,60}(\d{1,4})\s*(?:minut|min|minutes?)", excerpt, re.I)
                 if minutes: item.required_minutes = int(minutes.group(1))
@@ -224,12 +239,13 @@ async def sync_youtube_feed(db: AsyncSession, now: datetime | None = None) -> di
             if await db.scalar(select(DetectedEvent).where(DetectedEvent.source_url == url)): continue
             published_text = entry.findtext("a:published", namespaces=ns)
             published = datetime.fromisoformat(published_text.replace("Z", "+00:00")) if published_text else None
-            dates = extract_dates(description); excerpt = re.sub(r"\s+", " ", description).strip()[:700]
+            dates = extract_dates(description, now); excerpt = re.sub(r"\s+", " ", description).strip()[:700]
             item = DetectedEvent(fingerprint=hashlib.sha256(url.encode()).hexdigest(), title=title[:300],
                 summary=excerpt[:2000], published_at=published, starts_at=dates[0] if dates else None,
                 ends_at=dates[1] if len(dates)>1 else None, source_url=url,
                 source_name="World of Tanks — oficjalny kanał YouTube", excerpt=excerpt,
-                confidence=confidence, event_type=kind, last_checked_at=now)
+                confidence=confidence, event_type=kind, last_checked_at=now,
+                detected_date_text=", ".join(x.isoformat() for x in dates), date_confidence="exact" if dates else "none")
             db.add(item); await db.flush(); await apply_qualification(db, item); created += 1
         if created: db.add(EventLog(event_type="official_events_detected", message=f"Wykryto {created} nowych komunikatów oficjalnego kanału WoT"))
         await db.commit(); return {"created": created, "checked": checked, "cached": False}

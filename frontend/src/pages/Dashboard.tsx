@@ -35,8 +35,10 @@ export default function Dashboard() {
         body: JSON.stringify({ watched_minutes: Number(v), source: "manual" }),
       }).then(load);
   }
-  const current = c.filter((x) => x.status !== "ended"),
-    auto = current.filter((x) => x.auto_approved);
+  const current = c.filter((x) => !x.archived && ["active", "upcoming", "recent_announcement", "unknown_date_recent"].includes(x.freshness_status)),
+    auto = current.filter((x) => x.auto_approved),
+    historical = c.filter((x) => x.freshness_status === "historical"),
+    references = c.filter((x) => x.freshness_status === "reference_document");
   return (
     <>
       <div className="pagehead">
@@ -98,35 +100,34 @@ export default function Dashboard() {
         </span>
       </div>
       <Calendar30 />
-      <h1>Potwierdzone kampanie Drops</h1>
+      <h1>Jakie Twitch Drops możesz zdobyć teraz lub wkrótce?</h1>
       <Section
-        title="Wysoka wartość"
+        title="Aktywne teraz"
         icon={<Radio />}
-        items={auto.filter((x) => x.reward_value === "high")}
+        items={auto.filter((x) => x.freshness_status === "active")}
         edit={edit}
       />
       <Section
-        title="Średnia wartość"
-        items={auto.filter((x) => x.reward_value === "medium")}
+        title="Nadchodzące"
+        items={auto.filter((x) => x.freshness_status === "upcoming")}
         edit={edit}
       />
       <Section
-        title="Zwykłe Dropy"
-        items={auto.filter(
-          (x) => x.reward_value === "low" || x.reward_value === "unknown",
-        )}
+        title="Świeże zapowiedzi"
+        items={auto.filter((x) => ["recent_announcement", "unknown_date_recent"].includes(x.freshness_status))}
         edit={edit}
       />
       <Section
-        title="Wymagające decyzji / zatwierdzone ręcznie"
+        title="Ręcznie zatwierdzone aktualne kampanie"
         items={current.filter((x) => !x.auto_approved)}
         edit={edit}
       />
-      <Section
-        title="Historia nagród"
-        items={c.filter((x) => x.status === "ended")}
-        edit={edit}
-      />
+      <details><summary>Archiwum i materiały historyczne ({historical.length})</summary>
+        <Section title="Archiwum" items={historical} edit={edit} />
+      </details>
+      <details><summary>Poradniki i dokumenty referencyjne ({references.length})</summary>
+        <Section title="Poradniki i źródła" items={references} edit={edit} />
+      </details>
     </>
   );
 }

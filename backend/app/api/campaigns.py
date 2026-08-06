@@ -1,10 +1,10 @@
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -46,13 +46,11 @@ async def fetch(db: AsyncSession, campaign_id: int) -> Campaign:
 
 @router.get("")
 async def list_campaigns(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
-    now = datetime.now(UTC)
-    rows = (await db.execute(select(Campaign).options(selectinload(Campaign.rewards)).where(
-        or_(Campaign.ends_at.is_(None), Campaign.ends_at >= now - timedelta(days=90)),
-        or_(Campaign.starts_at.is_(None), Campaign.starts_at <= now + timedelta(days=30))
-    ).order_by(Campaign.starts_at))).scalars().unique().all()
+    rows = (await db.execute(select(Campaign).options(selectinload(Campaign.rewards))
+        .order_by(Campaign.archived, Campaign.starts_at))).scalars().unique().all()
     return [{**CampaignOut.model_validate(c).model_dump(mode="json"), "status": status_of(c),
-             "seconds_remaining": seconds_remaining(c)} for c in rows]
+             "seconds_remaining": seconds_remaining(c), "freshness_status": c.freshness_status,
+             "archived": c.archived} for c in rows]
 
 
 @router.post("", status_code=201)

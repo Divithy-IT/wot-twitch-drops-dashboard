@@ -18,6 +18,7 @@ export default function SettingsPage() {
     [discord, setDiscord] = useState<any>({ configured: false }),
     [logs, setLogs] = useState<any[]>([]),
     [rules, setRules] = useState<any>({}),
+    [archive, setArchive] = useState<any>({ enabled: true }),
     [sources, setSources] = useState<any[]>([]),
     [msg, setMsg] = useState("");
   const load = () =>
@@ -27,12 +28,14 @@ export default function SettingsPage() {
       api("/notifications/discord"),
       api("/qualification/settings"),
       api<any[]>("/trusted-sources"),
-    ]).then(([a, b, c, d, e]) => {
+      api("/archive/settings"),
+    ]).then(([a, b, c, d, e, f]) => {
       setT(a);
       setLogs(b);
       setDiscord(c);
       setRules(d);
       setSources(e);
+      setArchive(f);
     });
   useEffect(() => {
     load();
@@ -62,6 +65,11 @@ export default function SettingsPage() {
       body: JSON.stringify(rules),
     });
     setMsg("Reguły zapisane");
+  }
+  async function saveArchive(enabled: boolean) {
+    setArchive({ enabled });
+    await api("/archive/settings", { method: "PUT", body: JSON.stringify({ enabled }) });
+    setMsg("Ustawienie archiwizacji zapisane");
   }
   async function addSource(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -130,6 +138,10 @@ export default function SettingsPage() {
           </label>
         </div>
         <button onClick={saveRules}>Zapisz reguły</button>
+        <label className="check">
+          <input type="checkbox" checked={!!archive.enabled} onChange={(e) => saveArchive(e.target.checked)} />
+          Automatycznie archiwizuj zakończone wydarzenia
+        </label>
       </section>
       <section className="panel">
         <h2>Zaufane źródła</h2>

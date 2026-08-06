@@ -25,6 +25,9 @@ type D = {
   decision_reason: string;
   decided_by: string;
   decided_at: string | null;
+  freshness_status: "active" | "upcoming" | "recent_announcement" | "unknown_date_recent" | "historical" | "reference_document";
+  detected_date_text: string;
+  date_confidence: string;
 };
 const local = (x: string | null) =>
   x
@@ -64,6 +67,10 @@ export default function Detected() {
     setMsg(`Zignorowano transmisje bez Drops: ${result.ignored}`);
     load();
   }
+  async function archivePast() {
+    const result: any = await api("/detected-events/bulk/archive-past", { method: "POST" });
+    setMsg(`Przeniesiono do archiwum: ${result.archived}`); load();
+  }
   async function reanalyze(id: number) {
     await api(`/detected-events/${id}/reanalyze`, { method: "POST" });
     setMsg("Ponownie pobrano i zakwalifikowano źródło.");
@@ -101,7 +108,13 @@ export default function Detected() {
       (!x.probable_rewards.length || x.required_minutes == null || !x.starts_at || !x.ends_at);
     if (filter === "streams") return x.qualification_decision === "auto_ignore" &&
       (x.event_type === "stream" || x.decision_reason.toLowerCase().includes("transmis"));
-    if (filter === "manual") return x.qualification_decision === "manual_review";
+    if (filter === "active") return x.freshness_status === "active";
+    if (filter === "week") return x.freshness_status === "upcoming" && !!x.starts_at && new Date(x.starts_at).getTime() <= Date.now() + 7*86400000;
+    if (filter === "month") return x.freshness_status === "upcoming";
+    if (filter === "fresh") return ["recent_announcement", "unknown_date_recent"].includes(x.freshness_status);
+    if (filter === "historical") return x.freshness_status === "historical";
+    if (filter === "reference") return x.freshness_status === "reference_document";
+    if (filter === "manual") return x.qualification_decision === "manual_review" && !["historical", "reference_document"].includes(x.freshness_status);
     return true;
   });
   return (
@@ -185,12 +198,19 @@ export default function Detected() {
         </form>
       )}
       <div className="filters">
+        <button className="secondary" onClick={() => setFilter("active")}>Aktywne</button>
+        <button className="secondary" onClick={() => setFilter("week")}>Najbliższe 7 dni</button>
+        <button className="secondary" onClick={() => setFilter("month")}>Najbliższe 30 dni</button>
+        <button className="secondary" onClick={() => setFilter("fresh")}>Świeże zapowiedzi bez terminu</button>
+        <button className="secondary" onClick={() => setFilter("historical")}>Historyczne</button>
+        <button className="secondary" onClick={() => setFilter("reference")}>Dokumenty referencyjne</button>
         <button className="secondary" onClick={() => setFilter("confirmed")}>Drops potwierdzone oficjalnie</button>
         <button className="secondary" onClick={() => setFilter("missing")}>Brakuje tylko szczegółów</button>
         <button className="secondary" onClick={() => setFilter("streams")}>Zwykłe streamy bez Drops</button>
         <button className="secondary" onClick={() => setFilter("manual")}>Naprawdę wymagają decyzji</button>
         <button className="secondary" onClick={() => setFilter("all")}>Wszystkie</button>
         <button className="danger" onClick={ignorePlainStreams}>Zignoruj wszystkie transmisje bez wzmianki o Twitch Drops</button>
+        <button className="danger" onClick={archivePast}>Przenieś wszystkie minione wydarzenia do archiwum</button>
       </div>
       <div className="detected-grid">
         {visible.map((x) => (
@@ -211,6 +231,7 @@ export default function Detected() {
               </span>
             </header>
             <h3>{x.title}</h3>
+            <span className="source-tag">Świeżość: {x.freshness_status}</span>
             <p>{x.summary}</p>
             <blockquote>{x.decision_reason}</blockquote>
             {x.matched_keywords.length > 0 && (

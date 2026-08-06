@@ -15,8 +15,10 @@ from app.models import (
     WatchedChannel,
 )
 from app.security import decrypt_token
+from app.services.freshness import ACTIVE_FRESHNESS, assess_freshness
 from app.services.notifications import reserve_delivery, send_external
 from app.services.official_sources import sync_official_sources
+from app.services.qualification import apply_qualification
 from app.services.twitch import TwitchClient
 
 WINDOWS = {"start_24h": ("starts_at", 86400, "Kampania rozpocznie się za 24 godziny"),
@@ -28,7 +30,9 @@ WINDOWS = {"start_24h": ("starts_at", 86400, "Kampania rozpocznie się za 24 god
 async def notification_sweep() -> None:
     now = datetime.now(UTC); enabled = set(get_settings().notification_types.split(","))
     async with SessionLocal() as db:
-        for campaign in (await db.execute(select(Campaign))).scalars().all():
+        for campaign in (await db.execute(select(Campaign).where(
+            Campaign.archived.is_(False), Campaign.freshness_status.in_(ACTIVE_FRESHNESS)
+        ))).scalars().all():
             for kind, (field, offset, message) in WINDOWS.items():
                 if kind not in enabled: continue
                 target = getattr(campaign, field)
@@ -57,8 +61,17 @@ async def official_source_sweep() -> None:
         state = await db.get(AppSetting, "official_source_schedule")
         last = datetime.fromisoformat(state.value["last_run"]) if state and state.value.get("last_run") else None
         candidates = (await db.execute(select(DetectedEvent).where(
-            DetectedEvent.qualification_decision == QualificationDecision.manual_review
+            DetectedEvent.qualification_decision == QualificationDecision.manual_review,
+            DetectedEvent.freshness_status.in_(ACTIVE_FRESHNESS)
         ))).scalars().all()
+        archive_setting = await db.get(AppSetting, "auto_archive_ended")
+        if archive_setting is None or archive_setting.value.get("enabled", True):
+            all_events = (await db.execute(select(DetectedEvent))).scalars().all()
+            for item in all_events:
+                fresh = assess_freshness(item, now)
+                if fresh.status in {"historical", "reference_document"} and item.freshness_status != fresh.status:
+                    await apply_qualification(db, item)
+            await db.commit()
         interval = timedelta(hours=6)
         if any(x.starts_at and now <= (x.starts_at.replace(tzinfo=UTC) if x.starts_at.tzinfo is None else x.starts_at) <= now + timedelta(hours=24) for x in candidates):
             interval = timedelta(minutes=30)
@@ -80,6 +93,7 @@ async def official_source_sweep() -> None:
             if not await reserve_delivery(db, key, "external"): continue
             item = await db.get(DetectedEvent, decision.detected_event_id)
             if not item: continue
+            if item.freshness_status not in ACTIVE_FRESHNESS: continue
             if decision.decision == QualificationDecision.auto_approve:
                 subject = "Automatycznie zatwierdzono kampanię Twitch Drops"
             elif decision.decision == QualificationDecision.manual_review:

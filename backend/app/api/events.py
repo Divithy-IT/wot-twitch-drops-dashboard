@@ -24,6 +24,7 @@ from app.models import (
     WatchedChannel,
 )
 from app.security import encrypt_token
+from app.services.freshness import ACTIVE_FRESHNESS
 from app.services.notifications import send_external
 from app.services.official_sources import reanalyze_detected_event, sync_official_sources
 from app.services.qualification import DEFAULT_RULES, apply_qualification
@@ -66,7 +67,8 @@ def detection_json(item: DetectedEvent) -> dict:
         "reward_value": item.reward_value, "matched_keywords": item.matched_keywords,
         "score_breakdown": item.score_breakdown, "decision_reason": item.decision_reason,
         "decided_by": item.decided_by, "decided_at": item.decided_at,
-        "source_verified_at": item.source_verified_at}
+        "source_verified_at": item.source_verified_at, "freshness_status": item.freshness_status,
+        "detected_date_text": item.detected_date_text, "date_confidence": item.date_confidence}
 
 
 @router.get("/detected-events")
@@ -163,6 +165,20 @@ async def ignore_plain_streams(db: AsyncSession = Depends(get_db), _: Admin = De
     await db.commit(); return {"ignored": ignored}
 
 
+@router.post("/detected-events/bulk/archive-past")
+async def archive_past(db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    rows = (await db.execute(select(DetectedEvent).where(
+        DetectedEvent.freshness_status.in_(["historical", "reference_document"])
+    ))).scalars().all()
+    changed = 0
+    for item in rows:
+        if item.status == DetectionStatus.pending or item.qualification_decision != QualificationDecision.auto_ignore:
+            changed += 1
+        await apply_qualification(db, item, "administrator")
+    await db.commit()
+    return {"archived": changed}
+
+
 @router.post("/detected-events/{event_id}/{decision}")
 async def decide(event_id: int, decision: str, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
     if decision not in {"reject", "duplicate"}: raise HTTPException(422, "Nieprawidłowa decyzja")
@@ -234,6 +250,20 @@ async def save_qualification_settings(data: dict, db: AsyncSession = Depends(get
     row.value = {**DEFAULT_RULES, **clean}; await db.commit(); return row.value
 
 
+@router.get("/archive/settings")
+async def archive_settings(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
+    row = await db.get(AppSetting, "auto_archive_ended")
+    return {"enabled": True if row is None else bool(row.value.get("enabled", True))}
+
+
+@router.put("/archive/settings")
+async def save_archive_settings(data: dict, db: AsyncSession = Depends(get_db), _: Admin = Depends(mutation_admin)):
+    row = await db.get(AppSetting, "auto_archive_ended")
+    if not row: row = AppSetting(key="auto_archive_ended", value={}); db.add(row)
+    row.value = {"enabled": bool(data.get("enabled", True))}
+    await db.commit(); return row.value
+
+
 @router.get("/decision-history")
 async def decision_history(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
     rows = (await db.execute(select(DecisionHistory).order_by(DecisionHistory.created_at.desc()).limit(300))).scalars().all()
@@ -256,6 +286,7 @@ async def source_sync(db: AsyncSession = Depends(get_db), _: Admin = Depends(mut
 async def calendar(db: AsyncSession = Depends(get_db), _: Admin = Depends(current_admin)):
     now = datetime.now(UTC); end = now + timedelta(days=30); result = []
     campaigns = (await db.execute(select(Campaign).where(
+        Campaign.archived.is_(False), Campaign.freshness_status.in_(ACTIVE_FRESHNESS),
         or_(Campaign.ends_at.is_(None), Campaign.ends_at >= now),
         or_(Campaign.starts_at.is_(None), Campaign.starts_at <= end),
     ))).scalars().all()
@@ -263,7 +294,8 @@ async def calendar(db: AsyncSession = Depends(get_db), _: Admin = Depends(curren
         result.append({"id": f"campaign-{item.id}", "title": item.title, "type": "drops", "source": item.source_type,
                        "starts_at": item.starts_at, "ends_at": item.ends_at, "status": "confirmed", "url": item.link_url})
     detected = (await db.execute(select(DetectedEvent).where(DetectedEvent.starts_at >= now,
-        DetectedEvent.starts_at <= end, DetectedEvent.status == DetectionStatus.pending))).scalars().all()
+        DetectedEvent.starts_at <= end, DetectedEvent.status == DetectionStatus.pending,
+        DetectedEvent.freshness_status.in_(ACTIVE_FRESHNESS)))).scalars().all()
     for item in detected:
         result.append({"id": f"detected-{item.id}", "title": item.title, "type": item.event_type, "source": "automatic",
                        "starts_at": item.starts_at, "ends_at": item.ends_at, "status": "pending", "url": item.source_url})

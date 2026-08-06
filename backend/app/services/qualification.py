@@ -19,6 +19,7 @@ from app.models import (
     SourceType,
     TrustedSource,
 )
+from app.services.freshness import ACTIVE_FRESHNESS, assess_freshness
 
 DEFAULT_RULES = {
     "enabled": True,
@@ -84,7 +85,8 @@ def qualify(item: DetectedEvent, trusted: TrustedSource | None, rules: dict | No
             duplicate: bool = False, now: datetime | None = None) -> Qualification:
     rules = {**DEFAULT_RULES, **(rules or {})}; weights = {**DEFAULT_RULES["weights"], **rules.get("weights", {})}
     now = now or datetime.now(UTC)
-    text = re.sub(r"[-_/]+", " ", f"{item.title} {item.summary} {item.excerpt} {item.source_url}".lower())
+    text = re.sub(r"[-_/]+", " ", f"{item.title} {item.summary} {item.excerpt}".lower())
+    freshness = assess_freshness(item, now)
     matched = sorted({phrase for phrase in EXPLICIT if phrase in text})
     explicit = bool(matched); breakdown = []; score = 0
     def add(key: str, label: str):
@@ -95,9 +97,8 @@ def qualify(item: DetectedEvent, trusted: TrustedSource | None, rules: dict | No
     if item.required_minutes or watch_match: add("watch_time", "Podano wymagany czas oglądania")
     if item.probable_rewards: add("rewards", "Podano listę nagród")
     if item.starts_at and item.ends_at: add("dates", "Podano dokładne godziny")
-    starts = item.starts_at.replace(tzinfo=UTC) if item.starts_at and item.starts_at.tzinfo is None else item.starts_at
     ends = item.ends_at.replace(tzinfo=UTC) if item.ends_at and item.ends_at.tzinfo is None else item.ends_at
-    future_or_active = bool((starts and starts > now) or (ends and ends > now))
+    future_or_active = freshness.status in ACTIVE_FRESHNESS
     if future_or_active: add("future_or_active", "Wydarzenie przyszłe lub trwające")
     official_channel = "worldoftanks" in text or "twitch.tv/worldoftanks" in text or bool(
         trusted and "worldoftanks" in trusted.url_pattern
@@ -117,10 +118,12 @@ def qualify(item: DetectedEvent, trusted: TrustedSource | None, rules: dict | No
     blockers = []
     if not is_trusted: blockers.append("brak zaufanego źródła")
     if not explicit: blockers.append("brak jednoznacznego potwierdzenia Drops")
-    if ended or historical: blockers.append("wydarzenie historyczne lub zakończone")
+    if freshness.status == "reference_document": blockers.append("dokument referencyjny, nie kampania")
+    elif freshness.status == "historical": blockers.append("wydarzenie historyczne lub zakończone")
+    if not freshness.concrete_event: blockers.append("brak konkretnego aktualnego lub przyszłego wydarzenia")
     if duplicate: blockers.append("duplikat")
     if rules["require_worldoftanks_channel"] and not official_channel: blockers.append("brak oficjalnego kanału lub kategorii")
-    can_auto = rules["enabled"] and trusted and trusted.auto_approve and not blockers
+    can_auto = rules["enabled"] and trusted and trusted.auto_approve and not blockers and freshness.status in ACTIVE_FRESHNESS
     if can_auto and score >= rules["approve_threshold"]:
         decision = QualificationDecision.auto_approve
         missing = []
@@ -129,7 +132,7 @@ def qualify(item: DetectedEvent, trusted: TrustedSource | None, rules: dict | No
         if not item.starts_at or not item.ends_at: missing.append("dokładne godziny")
         suffix = f" Szczegóły oczekują na publikację: {', '.join(missing)}." if missing else ""
         reason = "Drops potwierdzone oficjalnie." + suffix
-    elif ended or historical or duplicate or stream_only or "youtube.com" in item.source_url or (
+    elif freshness.status in {"historical", "reference_document"} or ended or historical or duplicate or stream_only or "youtube.com" in item.source_url or (
         not explicit and is_trusted and "loading site please wait" not in text
     ):
         decision = QualificationDecision.auto_ignore
@@ -155,12 +158,20 @@ async def apply_qualification(db: AsyncSession, item: DetectedEvent, actor: str 
     duplicate_campaign = await db.scalar(select(Campaign).where(
         Campaign.source_url == item.source_url, Campaign.id != (item.approved_campaign_id or -1)
     ))
-    result = qualify(item, trusted, await load_rules(db), duplicate=bool(duplicate_campaign))
+    now = datetime.now(UTC)
+    freshness = assess_freshness(item, now)
+    item.freshness_status = freshness.status
+    result = qualify(item, trusted, await load_rules(db), duplicate=bool(duplicate_campaign), now=now)
     item.qualification_decision = result.decision; item.confidence_score = result.score
     item.reward_value = result.reward_value; item.matched_keywords = result.matched
     item.score_breakdown = result.breakdown; item.decision_reason = result.reason
-    item.decided_by = actor; item.decided_at = datetime.now(UTC)
-    item.source_verified_at = datetime.now(UTC) if result.trusted else None
+    item.decided_by = actor; item.decided_at = now
+    item.source_verified_at = now if result.trusted else None
+    if freshness.status in {"historical", "reference_document"} and item.approved_campaign_id:
+        previous = await db.get(Campaign, item.approved_campaign_id)
+        if previous and previous.auto_approved:
+            previous.archived = True; previous.freshness_status = freshness.status
+            previous.verification_reason = freshness.reason
     if result.decision == QualificationDecision.auto_ignore: item.status = DetectionStatus.rejected
     if result.decision == QualificationDecision.auto_approve and not item.approved_campaign_id:
         channels = ["worldoftanks"] if "worldoftanks" in " ".join(result.matched).lower() or "worldoftanks" in f"{item.summary} {item.excerpt}".lower() else []
@@ -169,7 +180,8 @@ async def apply_qualification(db: AsyncSession, item: DetectedEvent, actor: str 
             link_url="https://www.twitch.tv/worldoftanks" if channels else item.source_url,
             source_type=SourceType.wargaming, source_url=item.source_url, source_updated_at=datetime.now(UTC),
             progress_source=ProgressSource.manual, confidence_score=result.score, reward_value=result.reward_value,
-            auto_approved=True, verification_reason=result.reason, verified_at=datetime.now(UTC))
+            auto_approved=True, verification_reason=result.reason, verified_at=now,
+            freshness_status=freshness.status, archived=False)
         rewards = item.probable_rewards or ["Jeszcze nie podano"]
         campaign.rewards = [Reward(name=name, required_minutes=item.required_minutes or 0) for name in rewards]
         db.add(campaign); await db.flush(); item.status = DetectionStatus.approved; item.approved_campaign_id = campaign.id
@@ -189,6 +201,7 @@ async def apply_qualification(db: AsyncSession, item: DetectedEvent, actor: str 
                 campaign.rewards.extend(Reward(name=name, required_minutes=item.required_minutes or 0) for name in item.probable_rewards)
                 changed.append("rewards")
             campaign.confidence_score = result.score; campaign.reward_value = result.reward_value
+            campaign.freshness_status = freshness.status; campaign.archived = False
             campaign.verification_reason = result.reason; campaign.source_updated_at = datetime.now(UTC)
             if changed:
                 db.add(EventLog(event_type="campaign_details_updated", message=f"Uzupełniono szczegóły kampanii: {item.title}", details={"fields": changed}))

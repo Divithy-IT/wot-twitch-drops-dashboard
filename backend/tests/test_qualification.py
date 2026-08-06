@@ -79,12 +79,12 @@ def test_official_drops_with_date_only_are_approved():
     assert result.decision == QualificationDecision.auto_approve
 
 
-def test_official_structured_url_can_confirm_twitch_drops():
+def test_twitch_drops_guide_is_reference_not_campaign():
     item = event(title="Loading site please wait...", summary="", excerpt="", starts_at=None,
                  ends_at=None, required_minutes=None, probable_rewards=[],
                  source_url="https://worldoftanks.eu/pl/news/guides-reviews/twitch-drops-guide/")
     result = qualify(item, source())
-    assert result.decision == QualificationDecision.auto_approve and result.score == 80
+    assert result.decision == QualificationDecision.auto_ignore
 
 
 async def test_apply_creates_campaign_and_history_once():

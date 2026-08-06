@@ -76,6 +76,8 @@ class Campaign(Base):
     auto_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     verification_reason: Mapped[str] = mapped_column(Text, default="")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    freshness_status: Mapped[str] = mapped_column(String(40), default="historical", index=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     rewards: Mapped[list["Reward"]] = relationship(back_populates="campaign", cascade="all, delete-orphan", lazy="selectin")
 
 
@@ -159,6 +161,9 @@ class DetectedEvent(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_content_hash: Mapped[str] = mapped_column(String(64), default="")
+    freshness_status: Mapped[str] = mapped_column(String(40), default="historical", index=True)
+    detected_date_text: Mapped[str] = mapped_column(Text, default="")
+    date_confidence: Mapped[str] = mapped_column(String(20), default="none")
 
 
 class TrustedSource(Base):
